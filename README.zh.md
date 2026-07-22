@@ -32,7 +32,7 @@ eqtl [options]
 | `-c, --covar` | — | 协变量 |
 | `-k, --grm` | — | 亲缘矩阵前缀 `.grm.id`/`.grm.bin` |
 | `--make-grm` | 关 | 写亲缘矩阵后退出 |
-| `-m, --mode` | all | `cis` \| `trans` \| `all` |
+| `-m, --mode` | all | `cis` \| `trans` \| `all` \| `gw` |
 | `--model` | lmm | `lm` \| `glm` \| `lmm` \| `glmm`（逗号多选） |
 | `-w, --window` | 1000000 | TSS 两侧 cis 窗（bp） |
 | `--pval-cis` | 1e-5 | cis 写出 p 阈值 |

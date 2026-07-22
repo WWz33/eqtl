@@ -28,7 +28,14 @@ static double reml_negll(double delta, const Eigen::VectorXd& y_til,
   double q = y_til.dot(dinv.asDiagonal() * y_til) - XtDy.dot(beta);
   if (q <= 0) q = 1e-12;
   double sigma2 = q / df;
-  double logdet_x = std::log(std::max(XtDX.determinant(), 1e-300));
+  // log|X'D^{-1}X| from LDLT diagonals (stable vs determinant())
+  double logdet_x = 0.0;
+  const auto& D = ldlt.vectorD();
+  for (int i = 0; i < D.size(); ++i) {
+    const double di = D(i);
+    if (di <= 0) return 1e300;
+    logdet_x += std::log(di);
+  }
   // 0.5 * (df*log(sigma2) + log|D| + log|X'D^{-1}X|)
   return 0.5 * (df * std::log(sigma2) + logdet_d + logdet_x);
 }

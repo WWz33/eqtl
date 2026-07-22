@@ -81,7 +81,7 @@ void print_help() {
     << "\n"
     << "Analysis options:\n"
     << "        --make-grm         write relatedness matrix and exit\n"
-    << "    -m, --mode STR         cis|trans|all  [all]\n"
+    << "    -m, --mode STR         cis|trans|all|gw  [all]\n"
     << "        --model STR        lm|glm|lmm|glmm[,...]  [lmm]\n"
     << "    -w, --window INT       cis window around TSS (bp)  [1000000]\n"
     << "        --pval-cis FLOAT   cis output p threshold  [1e-5]\n"

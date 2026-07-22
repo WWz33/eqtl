@@ -32,7 +32,7 @@ eqtl [options]
 | `-c, --covar` | — | covariates |
 | `-k, --grm` | — | relatedness prefix `.grm.id`/`.grm.bin` |
 | `--make-grm` | off | write relatedness matrix and exit |
-| `-m, --mode` | all | `cis` \| `trans` \| `all` |
+| `-m, --mode` | all | `cis` \| `trans` \| `all` \| `gw` |
 | `--model` | lmm | `lm` \| `glm` \| `lmm` \| `glmm` (comma list) |
 | `-w, --window` | 1000000 | cis window around TSS (bp) |
 | `--pval-cis` | 1e-5 | cis output p threshold |

@@ -87,8 +87,12 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   run_test(model, opt.fast, y, X, K, lmm_basis, g0, &lm_c, &lmm_c, &glm_c, &glmm_c, false);
   cache = true;
 
-  for (const auto& snp : snps) {
+  std::vector<AssocHit> hits(snps.size());
+#pragma omp parallel for schedule(static) if (opt.threads > 1)
+  for (int si = 0; si < static_cast<int>(snps.size()); ++si) {
+    const auto& snp = snps[static_cast<size_t>(si)];
     Eigen::Map<const Eigen::VectorXd> g(snp.dosage.data(), static_cast<int>(snp.dosage.size()));
+    // prep caches are read-only after build; each test allocates temps
     AssocHit h =
         run_test(model, opt.fast, y, X, K, lmm_basis, g, &lm_c, &lmm_c, &glm_c, &glmm_c, cache);
     h.gene = gene;
@@ -102,6 +106,10 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
       h.has_tss_dist = true;
       h.tss_dist = static_cast<double>(snp.pos - loc->tss);
     }
+    hits[static_cast<size_t>(si)] = std::move(h);
+  }
+
+  for (const auto& h : hits) {
     if (std::isfinite(h.p)) {
       pvals.push_back(h.p);
     }
@@ -126,7 +134,13 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
 
   // gene-level empirical p: phenotype permutation; T = min p
   if (opt.perm > 0 && !snps.empty()) {
-    std::mt19937 rng(opt.seed >= 0 ? opt.seed : 1);
+    std::mt19937 rng;
+    if (opt.seed >= 0) {
+      rng.seed(static_cast<unsigned>(opt.seed));
+    } else {
+      std::random_device rd;
+      rng.seed(rd());
+    }
     // phenotype permutation: shuffle y indices
     std::vector<int> idx(y.size());
     std::iota(idx.begin(), idx.end(), 0);
