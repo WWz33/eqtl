@@ -67,22 +67,36 @@ static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd
   return 0.5 * (lo + hi);
 }
 
-GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X,
-                     const Eigen::MatrixXd& K, bool fast) {
+LmmBasis make_lmm_basis(const Eigen::MatrixXd& K) {
+  LmmBasis b;
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(K);
+  if (es.info() != Eigen::Success) {
+    die("GRM eigen decomposition failed");
+  }
+  b.Q = es.eigenvectors();
+  b.lambda = es.eigenvalues().cwiseMax(0.0);
+  return b;
+}
+
+GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const LmmBasis& basis,
+                     bool fast) {
   GenePrepLmm p;
   p.n = static_cast<int>(y.size());
   p.p = static_cast<int>(X.cols());
   p.fast = fast;
-  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(K);
-  if (es.info() != Eigen::Success) die("GRM eigen decomposition failed");
-  p.Q = es.eigenvectors();
-  p.lambda = es.eigenvalues().cwiseMax(0.0);
+  p.Q = basis.Q;
+  p.lambda = basis.lambda;
   p.y_til = p.Q.transpose() * y;
   p.X_til = p.Q.transpose() * X;
   if (fast) {
     p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
   }
   return p;
+}
+
+GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd& K,
+                     bool fast) {
+  return prep_lmm(y, X, make_lmm_basis(K), fast);
 }
 
 AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {

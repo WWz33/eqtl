@@ -12,3 +12,9 @@ third_party/gsl/
 *.grm.bin
 *.grm.id
 *.grm.N.bin
+
+data/*_*.tsv
+data/v2*
+data/hermes_*
+data/tmp*
+data/*grm*

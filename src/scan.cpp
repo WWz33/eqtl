@@ -31,9 +31,9 @@ bool needs_counts(Model m) {
 }
 
 AssocHit run_test(Model model, bool fast, const Eigen::VectorXd& y, const Eigen::MatrixXd& X,
-                  const Eigen::MatrixXd* K, const Eigen::VectorXd& g, GenePrepLm* lm_cache,
-                  GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache, GenePrepGlmm* glmm_cache,
-                  bool have_cache) {
+                  const Eigen::MatrixXd* K, const LmmBasis* lmm_basis, const Eigen::VectorXd& g,
+                  GenePrepLm* lm_cache, GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache,
+                  GenePrepGlmm* glmm_cache, bool have_cache) {
   switch (model) {
     case Model::Lm: {
       if (!have_cache) {
@@ -43,7 +43,11 @@ AssocHit run_test(Model model, bool fast, const Eigen::VectorXd& y, const Eigen:
     }
     case Model::Lmm: {
       if (!have_cache) {
-        *lmm_cache = prep_lmm(y, X, *K, fast);
+        if (lmm_basis) {
+          *lmm_cache = prep_lmm(y, X, *lmm_basis, fast);
+        } else {
+          *lmm_cache = prep_lmm(y, X, *K, fast);
+        }
       }
       return test_lmm(*lmm_cache, g);
     }
@@ -65,8 +69,8 @@ AssocHit run_test(Model model, bool fast, const Eigen::VectorXd& y, const Eigen:
 
 void scan_gene_snps(const Options& opt, Model model, const std::string& scope, const std::string& gene,
                     const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd* K,
-                    const GeneLoc* loc, const std::vector<SnpRec>& snps, double pthr, ScopeOut& out,
-                    GeneSummary& summary) {
+                    const LmmBasis* lmm_basis, const GeneLoc* loc, const std::vector<SnpRec>& snps,
+                    double pthr, ScopeOut& out, GeneSummary& summary) {
   GenePrepLm lm_c;
   GenePrepLmm lmm_c;
   GenePrepGlm glm_c;
@@ -80,12 +84,13 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
 
   // prebuild gene prep once
   Eigen::VectorXd g0 = Eigen::VectorXd::Zero(y.size());
-  run_test(model, opt.fast, y, X, K, g0, &lm_c, &lmm_c, &glm_c, &glmm_c, false);
+  run_test(model, opt.fast, y, X, K, lmm_basis, g0, &lm_c, &lmm_c, &glm_c, &glmm_c, false);
   cache = true;
 
   for (const auto& snp : snps) {
     Eigen::Map<const Eigen::VectorXd> g(snp.dosage.data(), static_cast<int>(snp.dosage.size()));
-    AssocHit h = run_test(model, opt.fast, y, X, K, g, &lm_c, &lmm_c, &glm_c, &glmm_c, cache);
+    AssocHit h =
+        run_test(model, opt.fast, y, X, K, lmm_basis, g, &lm_c, &lmm_c, &glm_c, &glmm_c, cache);
     h.gene = gene;
     h.snp = snp.id;
     h.chrom = snp.chrom;
@@ -142,11 +147,12 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
       GenePrepGlm glm_b;
       GenePrepGlmm glmm_b;
       Eigen::VectorXd g0b = Eigen::VectorXd::Zero(y.size());
-      run_test(model, opt.fast, yb, X, K, g0b, &lm_b, &lmm_b, &glm_b, &glmm_b, false);
+      run_test(model, opt.fast, yb, X, K, lmm_basis, g0b, &lm_b, &lmm_b, &glm_b, &glmm_b, false);
       double minp = 1.0;
       for (const auto& snp : snps) {
         Eigen::Map<const Eigen::VectorXd> g(snp.dosage.data(), static_cast<int>(snp.dosage.size()));
-        AssocHit hb = run_test(model, opt.fast, yb, X, K, g, &lm_b, &lmm_b, &glm_b, &glmm_b, true);
+        AssocHit hb =
+            run_test(model, opt.fast, yb, X, K, lmm_basis, g, &lm_b, &lmm_b, &glm_b, &glmm_b, true);
         if (hb.p < minp) {
           minp = hb.p;
         }
@@ -171,20 +177,6 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     write_pair_line(out.top, best, model, scope);
   }
   write_region_line(out.region, summary);
-}
-
-std::vector<SnpRec> collect_cis(VcfSession& vcf, const GeneLoc& loc, int window, MissHand miss) {
-  std::vector<SnpRec> snps;
-  if (!loc.ok) {
-    return snps;
-  }
-  const int64_t start = std::max<int64_t>(1, loc.tss - window);
-  const int64_t end = loc.tss + window;
-  vcf.for_each_snp_region(loc.chrom, start, end, miss, [&](const SnpRec& s) {
-    snps.push_back(s);
-    return true;
-  });
-  return snps;
 }
 
 }  // namespace
@@ -252,6 +244,8 @@ int run_eqtl(const Options& opt) {
   Grm grm;
   Eigen::MatrixXd* Kptr = nullptr;
   Eigen::MatrixXd Kmat;
+  LmmBasis lmm_basis;
+  const LmmBasis* lmm_basis_ptr = nullptr;
   if (any_grm) {
     if (!opt.grm.empty()) {
       grm = slice_grm(load_grm_gcta(opt.grm), sample_order);
@@ -261,18 +255,24 @@ int run_eqtl(const Options& opt) {
     }
     Kmat = grm.K;
     Kptr = &Kmat;
+    bool need_lmm = false;
+    for (Model m : opt.models) {
+      if (m == Model::Lmm) {
+        need_lmm = true;
+      }
+    }
+    if (need_lmm) {
+      info("eigendecompose GRM once");
+      lmm_basis = make_lmm_basis(Kmat);
+      lmm_basis_ptr = &lmm_basis;
+    }
   }
 
-  // For smoke/v1: load SNPs into memory per scope strategy
-  // IO-max: stream full VCF once for gw/trans; cis uses region queries
+  // Load SNPs once for cis/trans/gw (sequential stream; avoids per-gene full VCF rescans).
   std::vector<SnpRec> all_snps;
-  const bool need_all = std::find(scopes.begin(), scopes.end(), "trans") != scopes.end() ||
-                        std::find(scopes.begin(), scopes.end(), "gw") != scopes.end();
-  if (need_all) {
-    info("loading SNPs (stream)");
-    all_snps = vcf.load_all(opt.miss, -1);
-    info("SNPs loaded: " + std::to_string(all_snps.size()));
-  }
+  info("loading SNPs (stream)");
+  all_snps = vcf.load_all(opt.miss, -1);
+  info("SNPs loaded: " + std::to_string(all_snps.size()));
 
   for (Model model : opt.models) {
     if (needs_grm(model) && !Kptr) {
@@ -326,7 +326,13 @@ int run_eqtl(const Options& opt) {
           if (!locp) {
             continue;
           }
-          snps = collect_cis(vcf, *locp, opt.window, opt.miss);
+          const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
+          const int64_t cend = locp->tss + opt.window;
+          for (const auto& s : all_snps) {
+            if (s.chrom == locp->chrom && s.pos >= cstart && s.pos <= cend) {
+              snps.push_back(s);
+            }
+          }
         } else if (scope == "trans") {
           if (!locp) {
             continue;
@@ -348,7 +354,8 @@ int run_eqtl(const Options& opt) {
         }
 
         GeneSummary summary;
-        scan_gene_snps(opt, model, scope, gene, y, cov.X, Kptr, locp, snps, pthr, so, summary);
+        scan_gene_snps(opt, model, scope, gene, y, cov.X, Kptr, lmm_basis_ptr, locp, snps, pthr, so,
+                       summary);
       }
       info("finished " + prefix);
     }
