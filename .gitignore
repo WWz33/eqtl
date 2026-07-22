@@ -1,0 +1,14 @@
+eqtl
+*.o
+*.a
+*.so
+data/smoke_out*
+data/tmp*
+.agents
+.claude
+third_party/htslib/
+third_party/gsl/
+!third_party/eigen/
+*.grm.bin
+*.grm.id
+*.grm.N.bin
