@@ -124,7 +124,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   }
   summary.acat_p = acat(pvals);
 
-  // empirical p (tensorqtl-class)
+  // gene-level empirical p: phenotype permutation; T = min p
   if (opt.perm > 0 && !snps.empty()) {
     std::mt19937 rng(opt.seed >= 0 ? opt.seed : 1);
     // phenotype permutation: shuffle y indices

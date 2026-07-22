@@ -5,11 +5,8 @@
 
 namespace eqtl {
 
-// Spectral LMM (FaST-LMM / GEMMA-class):
-// K = Q diag(lambda) Q'
-// rotate: y_til = Q' y, X_til = Q' X
-// Var(y_til_j) ∝ delta*lambda_j + 1  (delta = sigma_g^2 / sigma_e^2)
-// Estimate delta by 1D grid + golden section on REML profile.
+// Spectral LMM: K = Q diag(lambda) Q'; Var_j ∝ delta*lambda_j + 1
+// (delta = sigma_g^2 / sigma_e^2). 1D REML profile for delta.
 
 static double reml_negll(double delta, const Eigen::VectorXd& y_til,
                          const Eigen::MatrixXd& X_til,

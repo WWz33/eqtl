@@ -14,9 +14,8 @@ Map cis/trans expression QTLs from VCF genotypes and a sample×gene phenotype ma
 git clone https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
-./scripts/make_smoke.sh
 ./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -c data/smoke.covar.tsv --model lm --mode cis --perm 0 --miss-hand impute -o data/out
+  --model lm --mode cis --perm 0 --miss-hand impute -o data/out
 ```
 
 ## Usage
@@ -27,22 +26,22 @@ eqtl [options]
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `-v, --vcf` | required | VCF/BCF genotypes (GT→0/1/2) |
+| `-v, --vcf` | required | VCF/BCF genotypes (GT) |
 | `-e, --pheno` | required* | phenotype matrix (col1=sample) |
-| `-g, --gff` | — | GFF3 for TSS; omit → genome-wide pairs |
-| `-c, --covar` | — | covariates (optional) |
-| `-k, --grm` | — | GCTA GRM prefix |
-| `--make-grm` | off | write GRM from VCF and exit |
-| `-m, --mode` | all | cis\|trans\|all |
-| `--model` | lmm | lm\|glm\|lmm\|glmm (comma list) |
-| `-w, --window` | 1000000 | cis window (bp) around TSS |
-| `--pval-cis` | 1e-5 | cis write p threshold |
-| `--pval-trans` | 1e-5 | trans/gw write p threshold |
-| `--miss-hand` | filter | filter\|impute missing GT |
-| `--fast` | off | per-gene shared nuisance |
-| `--perm` | 10000 | gene-level permutations (0=off) |
+| `-g, --gff` | — | GFF3; omit → genome-wide pairs |
+| `-c, --covar` | — | covariates |
+| `-k, --grm` | — | relatedness prefix `.grm.id`/`.grm.bin` |
+| `--make-grm` | off | write relatedness matrix and exit |
+| `-m, --mode` | all | `cis` \| `trans` \| `all` |
+| `--model` | lmm | `lm` \| `glm` \| `lmm` \| `glmm` (comma list) |
+| `-w, --window` | 1000000 | cis window around TSS (bp) |
+| `--pval-cis` | 1e-5 | cis output p threshold |
+| `--pval-trans` | 1e-5 | trans/gw output p threshold |
+| `--miss-hand` | filter | `filter` \| `impute` missing GT |
+| `--fast` | off | share variance/dispersion params per gene |
+| `--perm` | 10000 | gene-level permutations (`0`=off) |
 | `--seed` | — | permutation seed |
-| `--disable-beta-approx` | off | p_emp only |
+| `--disable-beta-approx` | off | omit beta-approximated p |
 | `-o, --out` | eqtl_out | output prefix |
 | `-t, --thread` | 1 | threads |
 
@@ -52,17 +51,17 @@ eqtl [options]
 
 | Kind | Notes |
 |------|--------|
-| Pheno | header gene names; col1 sample; remaining values |
-| Covar | col1 sample id; intercept added if absent |
-| GFF | gene features; TSS = start (+) or end (−) |
-| GRM | `prefix.grm.id` + `prefix.grm.bin` (GCTA) |
+| Pheno | header = gene ids; col1 = sample; remaining = values |
+| Covar | col1 = sample; intercept added if absent |
+| GFF | `gene` features; TSS = start (+) or end (−) |
+| GRM | `prefix.grm.id` + `prefix.grm.bin` (float32 lower triangle) |
 | Pairs | `{out}.{model}.{cis\|trans\|gw}.pairs.tsv` |
 | Top | `{out}.{model}.{scope}.top.tsv` |
-| Region | `{out}.{model}.{scope}.region.tsv` (ACAT, p_emp, p_beta) |
+| Region | `{out}.{model}.{scope}.region.tsv` (`acat_p`, `p_emp`, `p_beta`) |
 
 ## Citation
 
-Software under development. Cite methods as appropriate for your analysis design.
+If you use eqtl, cite the methods used in your study design.
 
 ## License
 

@@ -11,8 +11,8 @@ Grm load_grm_gcta(const std::string& prefix) {
   std::ifstream idf(prefix + ".grm.id");
   if (!idf) die("cannot open " + prefix + ".grm.id");
   std::string a, b;
+  // .grm.id: one sample per line; FID IID → use IID, else single token
   while (idf >> a) {
-    // GCTA: FID IID or single ID
     std::string rest;
     std::getline(idf, rest);
     auto t = split_ws(a + rest);

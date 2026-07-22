@@ -4,7 +4,7 @@
 
 namespace eqtl {
 
-// Poisson GLMM + GRM (PQL). SNP is fixed effect. Style independent of GEMMA/GCTA source.
+// Poisson GLMM with GRM random effect (PQL). SNP is fixed effect.
 
 namespace {
 
