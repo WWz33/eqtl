@@ -123,9 +123,10 @@ AssocHit test_glmm_pois(const GenePrepGlmm& prep, const Eigen::VectorXd& g) {
   const Eigen::MatrixXd SiX = sldlt.solve(Xg);
   const Eigen::MatrixXd XtSiX = Xg.transpose() * SiX;
   const Eigen::LDLT<Eigen::MatrixXd> xldlt(XtSiX);
-  const Eigen::MatrixXd covb =
-      xldlt.solve(Eigen::MatrixXd::Identity(Xg.cols(), Xg.cols()));
-  hit.se = std::sqrt(std::max(covb(prep.X.cols(), prep.X.cols()), 0.0));
+  Eigen::VectorXd e = Eigen::VectorXd::Zero(Xg.cols());
+  e(prep.X.cols()) = 1.0;
+  const Eigen::VectorXd cov_col = xldlt.solve(e);
+  hit.se = std::sqrt(std::max(cov_col(prep.X.cols()), 0.0));
   hit.stat = (hit.se > 0) ? (hit.beta / hit.se) : 0.0;
   hit.p = pnorm_two_sided(hit.stat);
   hit.r2 = 0;

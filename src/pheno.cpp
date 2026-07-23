@@ -105,7 +105,7 @@ CovData load_covar(const std::string& path, const std::vector<std::string>& samp
     rows.push_back(std::move(r));
   }
   if (rows.empty()) die("no covariates in " + path);
-  int nc = (int)rows[0].size();
+  int nc = static_cast<int>(rows[0].size());
   if (names.empty()) {
     for (int j = 0; j < nc; ++j) names.push_back("cov" + std::to_string(j + 1));
   }
@@ -114,16 +114,21 @@ CovData load_covar(const std::string& path, const std::vector<std::string>& samp
   for (size_t i = 0; i < sample_ids.size(); ++i) {
     auto it = fmap.find(sample_ids[i]);
     if (it == fmap.end()) die("sample " + sample_ids[i] + " missing in covar");
-    if ((int)rows[it->second].size() != nc) die("covar row width mismatch");
-    for (int j = 0; j < nc; ++j) raw(i, j) = rows[it->second][j];
+    if (static_cast<int>(rows[it->second].size()) != nc) die("covar row width mismatch");
+    for (int j = 0; j < nc; ++j) raw(static_cast<int>(i), j) = rows[it->second][j];
   }
-  // intercept if no constant column of ones
   bool has_int = false;
   for (int j = 0; j < nc; ++j) {
     bool ok = true;
-    for (int i = 0; i < (int)sample_ids.size(); ++i)
-      if (std::fabs(raw(i, j) - 1.0) > 1e-12) { ok = false; break; }
-    if (ok) { has_int = true; break; }
+    for (int i = 0; i < static_cast<int>(sample_ids.size()); ++i)
+      if (std::fabs(raw(i, j) - 1.0) > 1e-12) {
+        ok = false;
+        break;
+      }
+    if (ok) {
+      has_int = true;
+      break;
+    }
   }
   if (!has_int) {
     C.X.resize(sample_ids.size(), nc + 1);

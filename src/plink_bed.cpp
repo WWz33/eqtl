@@ -117,7 +117,6 @@ void PlinkBed::set_sample_order(const std::vector<std::string>& sample_ids) {
     if (it == m.end()) die("sample not in fam: " + id);
     sample_col_.push_back(it->second);
   }
-  // Pre-size reused dosage buffer
   snp_reuse_.dosage.resize(sample_col_.size());
 }
 
@@ -132,7 +131,6 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
   if (sample_col_.empty() || snp_idx >= sites_.size()) return false;
   const int n_an = static_cast<int>(sample_col_.size());
   if (static_cast<int>(out.dosage.size()) != n_an) out.dosage.resize(static_cast<size_t>(n_an));
-  // Mark all missing first via NaN
   std::fill(out.dosage.begin(), out.dosage.end(), std::numeric_limits<double>::quiet_NaN());
   int n_miss = 0;
   double sum = 0.0;

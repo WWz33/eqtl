@@ -73,7 +73,7 @@ void print_help() {
     << "\n"
     << "Input options:\n"
     << "    -v, --vcf FILE         genotypes VCF/BCF (GT)\n"
-    << "    -b, --bfile PREFIX     PLINK bed/bim/fam prefix (GCTA/GEMMA-style)\n"
+    << "    -b, --bfile PREFIX     PLINK bed/bim/fam prefix\n"
     << "    -e, --pheno FILE       phenotype matrix (col1=sample)\n"
     << "    -g, --gff FILE         GFF3 gene annotation (TSS)\n"
     << "    -c, --covar FILE       covariates\n"

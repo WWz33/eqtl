@@ -32,24 +32,22 @@ bool needs_counts(Model m) {
   return m == Model::Glm || m == Model::Glmm;
 }
 
-// GCTA-style: keep individuals with finite y (and finite covar rows)
 struct GeneReady {
-  std::vector<int> keep; // indices into full sample order
+  std::vector<int> keep;
   Eigen::VectorXd y;
   Eigen::MatrixXd X;
-  Eigen::MatrixXd K; // n_keep x n_keep if used
+  Eigen::MatrixXd K;
   LmmBasis basis;
   bool has_basis = false;
-  int n_full = 0;
 };
 
 bool build_gene_ready(const Eigen::VectorXd& y_full, const Eigen::MatrixXd& X_full,
                       const Eigen::MatrixXd* K_full, bool need_k, bool need_lmm_basis,
                       bool fast_sparse, GeneReady& out) {
-  out.n_full = static_cast<int>(y_full.size());
+  const int n_full = static_cast<int>(y_full.size());
   out.keep.clear();
-  out.keep.reserve(out.n_full);
-  for (int i = 0; i < out.n_full; ++i) {
+  out.keep.reserve(static_cast<size_t>(n_full));
+  for (int i = 0; i < n_full; ++i) {
     if (!std::isfinite(y_full(i))) continue;
     bool ok = true;
     for (int j = 0; j < X_full.cols(); ++j) {
@@ -105,7 +103,7 @@ Eigen::VectorXd subset_dosage(const std::vector<double>& full, const std::vector
   return g;
 }
 
-// dosage may live in a reused SnpRec buffer — always own a copy for regression
+// dosage may live in a reused SnpRec buffer
 Eigen::VectorXd dosage_vec(const SnpRec& snp, const GeneReady& gr) {
   if (static_cast<int>(snp.dosage.size()) == static_cast<int>(gr.keep.size())) {
     Eigen::VectorXd g(static_cast<int>(snp.dosage.size()));
@@ -257,7 +255,6 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
       grb.K = gr.K;
       grb.basis = gr.basis;
       grb.has_basis = gr.has_basis;
-      grb.n_full = gr.n_full;
       grb.y.resize(gr.y.size());
       for (int i = 0; i < gr.y.size(); ++i) grb.y(i) = gr.y(idx[static_cast<size_t>(i)]);
 

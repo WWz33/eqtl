@@ -33,7 +33,6 @@ struct Options {
   // filter default 0 => any missing drops; impute still respects max_miss before fill
   double max_miss = 0.0;
   // keep if maf_min <= MAF <= 1-maf_min on analysis samples (non-missing); 0 = off
-  // (GCTA/GEMMA-style)
   double maf = 0.0;
   bool fast = false;
   int threads = 1;
