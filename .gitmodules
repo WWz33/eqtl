@@ -1,0 +1,7 @@
+[submodule "third_party/gffsub"]
+	path = third_party/gffsub
+	url = https://github.com/WWz33/gffsub.git
+[submodule "third_party/htslib"]
+	path = third_party/htslib
+	url = https://github.com/samtools/htslib.git
+	version = 1.24

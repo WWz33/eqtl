@@ -1,4 +1,4 @@
-/* eqtl — GFF gene TSS */
+/* eqtl — GFF gene TSS (via third_party/gffsub) */
 #pragma once
 #include <string>
 #include <vector>

@@ -7,10 +7,24 @@
 # local scripts (not shipped)
 /scripts/
 
-# build / deps
-third_party/htslib/
-third_party/gsl/
+# third_party build products only (sources tracked as submodules)
+third_party/htslib/config.mk
+third_party/htslib/config.h
+third_party/htslib/htslib_static.mk
+third_party/htslib/*.o
+third_party/htslib/**/*.o
+third_party/htslib/libhts.a
+third_party/htslib/hts
+third_party/htslib/tabix
+third_party/htslib/bgzip
+third_party/htslib/*.pc
+third_party/gffsub/gffsub
+third_party/gffsub/**/*.o
+
+# keep sources
 !third_party/eigen/
+!third_party/gffsub/
+!third_party/htslib/
 
 # agent / IDE
 .agents
