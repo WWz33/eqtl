@@ -31,157 +31,266 @@ bool needs_counts(Model m) {
   return m == Model::Glm || m == Model::Glmm;
 }
 
-AssocHit run_test(Model model, bool fast, const Eigen::VectorXd& y, const Eigen::MatrixXd& X,
-                  const Eigen::MatrixXd* K, const LmmBasis* lmm_basis, const Eigen::VectorXd& g,
+// GCTA-style: keep individuals with finite y (and finite covar rows)
+struct GeneReady {
+  std::vector<int> keep; // indices into full sample order
+  Eigen::VectorXd y;
+  Eigen::MatrixXd X;
+  Eigen::MatrixXd K; // n_keep x n_keep if used
+  LmmBasis basis;
+  bool has_basis = false;
+  int n_full = 0;
+};
+
+bool build_gene_ready(const Eigen::VectorXd& y_full, const Eigen::MatrixXd& X_full,
+                      const Eigen::MatrixXd* K_full, bool need_k, bool need_lmm_basis,
+                      bool fast_sparse, GeneReady& out) {
+  out.n_full = static_cast<int>(y_full.size());
+  out.keep.clear();
+  out.keep.reserve(out.n_full);
+  for (int i = 0; i < out.n_full; ++i) {
+    if (!std::isfinite(y_full(i))) continue;
+    bool ok = true;
+    for (int j = 0; j < X_full.cols(); ++j) {
+      if (!std::isfinite(X_full(i, j))) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) out.keep.push_back(i);
+  }
+  const int nk = static_cast<int>(out.keep.size());
+  if (nk < 3) return false;
+
+  out.y.resize(nk);
+  out.X.resize(nk, X_full.cols());
+  for (int r = 0; r < nk; ++r) {
+    const int i = out.keep[static_cast<size_t>(r)];
+    out.y(r) = y_full(i);
+    out.X.row(r) = X_full.row(i);
+  }
+  if (out.y.array().abs().maxCoeff() < 1e-15) return false;
+
+  if (need_k) {
+    if (!K_full) return false;
+    out.K.resize(nk, nk);
+    for (int a = 0; a < nk; ++a)
+      for (int b = 0; b < nk; ++b)
+        out.K(a, b) = (*K_full)(out.keep[static_cast<size_t>(a)], out.keep[static_cast<size_t>(b)]);
+    if (need_lmm_basis) {
+      Eigen::MatrixXd K_use = out.K;
+      if (fast_sparse) sparsify_grm(K_use, 1e-4);
+      out.basis = make_lmm_basis(K_use);
+      out.has_basis = true;
+    }
+  }
+  return true;
+}
+
+Eigen::VectorXd subset_dosage(const std::vector<double>& full, const std::vector<int>& keep) {
+  Eigen::VectorXd g(static_cast<int>(keep.size()));
+  for (size_t r = 0; r < keep.size(); ++r) {
+    const int i = keep[r];
+    if (i < 0 || static_cast<size_t>(i) >= full.size()) {
+      g(static_cast<int>(r)) = std::numeric_limits<double>::quiet_NaN();
+    } else {
+      g(static_cast<int>(r)) = full[static_cast<size_t>(i)];
+    }
+  }
+  return g;
+}
+
+// If dosage length already equals keep size (pre-subset), use as-is
+Eigen::VectorXd dosage_vec(const SnpRec& snp, const GeneReady& gr) {
+  if (static_cast<int>(snp.dosage.size()) == static_cast<int>(gr.keep.size())) {
+    return Eigen::Map<const Eigen::VectorXd>(snp.dosage.data(), static_cast<int>(snp.dosage.size()));
+  }
+  return subset_dosage(snp.dosage, gr.keep);
+}
+
+AssocHit run_test(Model model, bool fast, const GeneReady& gr, const Eigen::VectorXd& g,
                   GenePrepLm* lm_cache, GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache,
                   GenePrepGlmm* glmm_cache, bool have_cache) {
   switch (model) {
     case Model::Lm: {
-      if (!have_cache) {
-        *lm_cache = prep_lm(y, X);
-      }
+      if (!have_cache) *lm_cache = prep_lm(gr.y, gr.X);
       return test_lm(*lm_cache, g);
     }
     case Model::Lmm: {
       if (!have_cache) {
-        if (lmm_basis) {
-          *lmm_cache = prep_lmm(y, X, *lmm_basis, fast);
-        } else {
-          *lmm_cache = prep_lmm(y, X, *K, fast);
-        }
+        if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, gr.basis, fast);
+        else *lmm_cache = prep_lmm(gr.y, gr.X, gr.K, fast);
       }
       return test_lmm(*lmm_cache, g);
     }
     case Model::Glm: {
-      if (!have_cache) {
-        *glm_cache = prep_glm_nb(y, X, fast);
-      }
+      if (!have_cache) *glm_cache = prep_glm_nb(gr.y, gr.X, fast);
       return test_glm_nb(*glm_cache, g);
     }
     case Model::Glmm: {
-      if (!have_cache) {
-        *glmm_cache = prep_glmm_pois(y, X, *K, fast);
-      }
+      if (!have_cache) *glmm_cache = prep_glmm_pois(gr.y, gr.X, gr.K, fast);
       return test_glmm_pois(*glmm_cache, g);
     }
   }
   return {};
 }
 
+// Test one SNP; returns hit with meta filled from snp/gene
+AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp,
+                  const std::string& gene, const GeneLoc* loc, GenePrepLm* lm_c, GenePrepLmm* lmm_c,
+                  GenePrepGlm* glm_c, GenePrepGlmm* glmm_c, bool have_cache) {
+  Eigen::VectorXd g = dosage_vec(snp, gr);
+  // drop SNP if any non-finite dosage among keep (after impute path should be finite)
+  for (int i = 0; i < g.size(); ++i) {
+    if (!std::isfinite(g(i))) {
+      AssocHit h;
+      h.p = 1.0;
+      return h;
+    }
+  }
+  AssocHit h = run_test(model, fast, gr, g, lm_c, lmm_c, glm_c, glmm_c, have_cache);
+  h.gene = gene;
+  h.snp = snp.id;
+  h.chrom = snp.chrom;
+  h.pos = snp.pos;
+  h.ref = snp.ref;
+  h.alt = snp.alt;
+  h.maf = snp.maf;
+  if (loc && loc->ok) {
+    h.has_tss_dist = true;
+    h.tss_dist = static_cast<double>(snp.pos - loc->tss);
+  }
+  return h;
+}
+
+bool in_cis_window(const SnpRec& s, const GeneLoc& loc, int window) {
+  if (!chrom_equal(s.chrom, loc.chrom)) return false;
+  const int64_t cstart = std::max<int64_t>(1, loc.tss - window);
+  const int64_t cend = loc.tss + window;
+  return s.pos >= cstart && s.pos <= cend;
+}
+
+// Collect SNP list only for small cis regions; null for stream modes
 void scan_gene_snps(const Options& opt, Model model, const std::string& scope, const std::string& gene,
-                    const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd* K,
-                    const LmmBasis* lmm_basis, const GeneLoc* loc, const std::vector<SnpRec>& snps,
-                    double pthr, ScopeOut& out, GeneSummary& summary) {
+                    const GeneReady& gr, const GeneLoc* loc, const std::vector<SnpRec>* snps_list,
+                    // if snps_list null and stream_fn set, caller streams; here we only handle list
+                    double pthr, ScopeOut& out, GeneSummary& summary,
+                    const std::function<void(const std::function<void(const SnpRec&)>&)>& stream_snps) {
   GenePrepLm lm_c;
   GenePrepLmm lmm_c;
   GenePrepGlm glm_c;
   GenePrepGlmm glmm_c;
-  bool cache = false;
+
+  // build null cache once
+  {
+    Eigen::VectorXd g0 = Eigen::VectorXd::Zero(gr.y.size());
+    run_test(model, opt.fast, gr, g0, &lm_c, &lmm_c, &glm_c, &glmm_c, false);
+  }
 
   AssocHit best;
   best.p = 2.0;
   std::vector<double> pvals;
-  pvals.reserve(snps.size());
+  int n_tested = 0;
+  summary.n_sig = 0;
 
-  // prebuild gene prep once
-  Eigen::VectorXd g0 = Eigen::VectorXd::Zero(y.size());
-  run_test(model, opt.fast, y, X, K, lmm_basis, g0, &lm_c, &lmm_c, &glm_c, &glmm_c, false);
-  cache = true;
-
-  std::vector<AssocHit> hits(snps.size());
-#pragma omp parallel for schedule(static) if (opt.threads > 1)
-  for (int si = 0; si < static_cast<int>(snps.size()); ++si) {
-    const auto& snp = snps[static_cast<size_t>(si)];
-    Eigen::Map<const Eigen::VectorXd> g(snp.dosage.data(), static_cast<int>(snp.dosage.size()));
-    // prep caches are read-only after build; each test allocates temps
+  auto consume = [&](const SnpRec& snp) {
     AssocHit h =
-        run_test(model, opt.fast, y, X, K, lmm_basis, g, &lm_c, &lmm_c, &glm_c, &glmm_c, cache);
-    h.gene = gene;
-    h.snp = snp.id;
-    h.chrom = snp.chrom;
-    h.pos = snp.pos;
-    h.ref = snp.ref;
-    h.alt = snp.alt;
-    h.maf = snp.maf;
-    if (loc && loc->ok) {
-      h.has_tss_dist = true;
-      h.tss_dist = static_cast<double>(snp.pos - loc->tss);
-    }
-    hits[static_cast<size_t>(si)] = std::move(h);
-  }
-
-  for (const auto& h : hits) {
-    if (std::isfinite(h.p)) {
-      pvals.push_back(h.p);
-    }
+        test_one(model, opt.fast, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true);
+    if (!std::isfinite(h.p)) return;
+    ++n_tested;
+    pvals.push_back(h.p);
     if (h.p <= pthr) {
       write_pair_line(out.pairs, h, model, scope);
       ++summary.n_sig;
     }
-    if (h.p < best.p) {
-      best = h;
+    if (h.p < best.p) best = h;
+  };
+
+  if (snps_list) {
+    const int n = static_cast<int>(snps_list->size());
+    std::vector<AssocHit> hits(static_cast<size_t>(n));
+#pragma omp parallel for schedule(static) if (opt.threads > 1)
+    for (int si = 0; si < n; ++si) {
+      hits[static_cast<size_t>(si)] = test_one(model, opt.fast, gr, (*snps_list)[static_cast<size_t>(si)],
+                                               gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true);
     }
+    for (const auto& h : hits) {
+      if (!std::isfinite(h.p)) continue;
+      ++n_tested;
+      pvals.push_back(h.p);
+      if (h.p <= pthr) {
+        write_pair_line(out.pairs, h, model, scope);
+        ++summary.n_sig;
+      }
+      if (h.p < best.p) best = h;
+    }
+  } else if (stream_snps) {
+    stream_snps(consume);
   }
 
   summary.gene = gene;
-  summary.n_tested = static_cast<int>(snps.size());
+  summary.n_tested = n_tested;
   if (loc && loc->ok) {
     summary.chrom = loc->chrom;
     summary.tss = loc->tss;
-  } else if (!snps.empty()) {
-    summary.chrom = snps.front().chrom;
   }
   summary.acat_p = acat(pvals);
 
-  // gene-level empirical p: phenotype permutation; T = min p
-  if (opt.perm > 0 && !snps.empty()) {
-    std::mt19937 rng;
-    if (opt.seed >= 0) {
-      rng.seed(static_cast<unsigned>(opt.seed));
-    } else {
-      std::random_device rd;
-      rng.seed(rd());
-    }
-    // phenotype permutation: shuffle y indices
-    std::vector<int> idx(y.size());
-    std::iota(idx.begin(), idx.end(), 0);
-    const double T_obs = best.p;  // min p
-    std::vector<double> T_perm;
-    T_perm.reserve(opt.perm);
-    std::vector<double> perm_min_p;
-    perm_min_p.reserve(opt.perm);
+  // gene-level perm: shuffle y among keep; re-fit null; min p
+  if (opt.perm > 0 && n_tested > 0) {
+    const double T_obs = best.p;
+    std::vector<double> T_perm(static_cast<size_t>(opt.perm));
+    std::vector<double> perm_min_p(static_cast<size_t>(opt.perm));
 
+    const bool have_list = snps_list != nullptr;
+
+#pragma omp parallel for schedule(dynamic) if (opt.threads > 1)
     for (int b = 0; b < opt.perm; ++b) {
-      std::shuffle(idx.begin(), idx.end(), rng);
-      Eigen::VectorXd yb(y.size());
-      for (int i = 0; i < y.size(); ++i) {
-        yb(i) = y(idx[i]);
-      }
+      std::mt19937 rng_b(static_cast<unsigned>(opt.seed >= 0 ? opt.seed : 1) +
+                         static_cast<unsigned>(b) * 9973u +
+                         static_cast<unsigned>(std::hash<std::string>{}(gene)));
+
+      std::vector<int> idx(static_cast<size_t>(gr.y.size()));
+      std::iota(idx.begin(), idx.end(), 0);
+      std::shuffle(idx.begin(), idx.end(), rng_b);
+
+      GeneReady grb = gr;
+      for (int i = 0; i < gr.y.size(); ++i) grb.y(i) = gr.y(idx[static_cast<size_t>(i)]);
+
       GenePrepLm lm_b;
       GenePrepLmm lmm_b;
       GenePrepGlm glm_b;
       GenePrepGlmm glmm_b;
-      Eigen::VectorXd g0b = Eigen::VectorXd::Zero(y.size());
-      run_test(model, opt.fast, yb, X, K, lmm_basis, g0b, &lm_b, &lmm_b, &glm_b, &glmm_b, false);
+      Eigen::VectorXd g0 = Eigen::VectorXd::Zero(grb.y.size());
+      run_test(model, opt.fast, grb, g0, &lm_b, &lmm_b, &glm_b, &glmm_b, false);
+
       double minp = 1.0;
-      for (const auto& snp : snps) {
-        Eigen::Map<const Eigen::VectorXd> g(snp.dosage.data(), static_cast<int>(snp.dosage.size()));
+      auto take = [&](const SnpRec& snp) {
         AssocHit hb =
-            run_test(model, opt.fast, yb, X, K, lmm_basis, g, &lm_b, &lmm_b, &glm_b, &glmm_b, true);
-        if (hb.p < minp) {
-          minp = hb.p;
+            test_one(model, opt.fast, grb, snp, gene, loc, &lm_b, &lmm_b, &glm_b, &glmm_b, true);
+        if (std::isfinite(hb.p) && hb.p < minp) minp = hb.p;
+      };
+
+      if (have_list) {
+        const int n = static_cast<int>(snps_list->size());
+        for (int si = 0; si < n; ++si) take((*snps_list)[static_cast<size_t>(si)]);
+      } else if (stream_snps) {
+#pragma omp critical(eqtl_perm_stream)
+        {
+          stream_snps(take);
         }
       }
-      // T larger is more extreme: use -log10(p)
-      T_perm.push_back(-std::log10(std::max(minp, 1e-300)));
-      perm_min_p.push_back(minp);
+
+      T_perm[static_cast<size_t>(b)] = -std::log10(std::max(minp, 1e-300));
+      perm_min_p[static_cast<size_t>(b)] = minp;
     }
+
     const double Tobs = -std::log10(std::max(T_obs, 1e-300));
     summary.p_emp = p_emp_count(Tobs, T_perm);
     if (!opt.disable_beta_approx) {
       beta_approx_p(perm_min_p, T_obs, summary.p_beta, summary.beta_shape1, summary.beta_shape2);
     } else {
-      summary.p_beta = summary.p_emp;
+      summary.p_beta = std::numeric_limits<double>::quiet_NaN();
     }
   } else {
     summary.p_emp = std::numeric_limits<double>::quiet_NaN();
@@ -225,7 +334,6 @@ int run_make_grm(const Options& opt) {
   return 0;
 }
 
-// Genotype source: VCF or PLINK bfile (same scan loop)
 template <typename G>
 int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
                   const std::vector<std::string>& sample_order) {
@@ -260,8 +368,6 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
   Grm grm;
   Eigen::MatrixXd* Kptr = nullptr;
   Eigen::MatrixXd Kmat;
-  LmmBasis lmm_basis;
-  const LmmBasis* lmm_basis_ptr = nullptr;
   MissPolicy mp{opt.miss, opt.max_miss};
   const double maf = opt.maf;
   if (any_grm) {
@@ -273,39 +379,17 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
     }
     Kmat = grm.K;
     Kptr = &Kmat;
-    bool need_lmm = false;
-    for (Model m : opt.models) {
-      if (m == Model::Lmm) need_lmm = true;
-    }
-    if (need_lmm) {
-      // LMM eigenbasis: optional sparse approx must not mutate K used by glmm
-      Eigen::MatrixXd K_lmm = Kmat;
-      if (opt.fast) {
-        sparsify_grm(K_lmm, 1e-4);
-      }
-      info("eigendecompose GRM once");
-      lmm_basis = make_lmm_basis(K_lmm);
-      lmm_basis_ptr = &lmm_basis;
-    }
   }
 
-  const bool need_all_snps =
-      std::find(scopes.begin(), scopes.end(), "trans") != scopes.end() ||
-      std::find(scopes.begin(), scopes.end(), "gw") != scopes.end();
-  std::vector<SnpRec> all_snps;
-  if (need_all_snps) {
-    info("loading SNPs (stream)");
-    all_snps = geno.load_all(mp, maf, -1);
-    info("SNPs loaded: " + std::to_string(all_snps.size()));
-  } else {
-    info("cis-only: region queries");
-  }
-
-  std::vector<SnpRec> cis_buf;
-  cis_buf.reserve(8192);
+  // Never load_all into double matrix for trans/gw — stream instead.
+  info(have_gff && scopes.size() == 1 && scopes[0] == "cis" ? "cis-only: region queries"
+                                                            : "trans/gw: stream SNPs (no load_all)");
 
   for (Model model : opt.models) {
     if (needs_grm(model) && !Kptr) die("internal: GRM required");
+    const bool need_k = needs_grm(model);
+    const bool need_lmm_basis = (model == Model::Lmm);
+
     for (const std::string& scope : scopes) {
       const std::string prefix = opt.out + "." + model_str(model) + "." + scope;
       ScopeOut so;
@@ -330,11 +414,23 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         const std::string& gene = ph.gene_ids[gi];
         Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
 
-        if (!y.allFinite()) continue;
-        if (y.array().abs().maxCoeff() < 1e-15) continue;
         if (needs_counts(model) && !looks_like_counts(y)) {
-          warn("skip non-count gene for " + model_str(model) + ": " + gene);
-          continue;
+          // allow NA: check on finite subset later
+          bool any_count = false;
+          int checked = 0;
+          for (int i = 0; i < y.size() && checked < 20; ++i) {
+            if (!std::isfinite(y(i))) continue;
+            ++checked;
+            if (y(i) < 0 || std::fabs(y(i) - std::floor(y(i))) > 1e-8) {
+              any_count = false;
+              break;
+            }
+            any_count = true;
+          }
+          if (!any_count) {
+            warn("skip non-count gene for " + model_str(model) + ": " + gene);
+            continue;
+          }
         }
 
         const GeneLoc* locp = nullptr;
@@ -346,45 +442,36 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           locp = &loc_store;
         }
 
-        std::vector<SnpRec>* snps_ptr = nullptr;
-        std::vector<SnpRec> snps_owned;
+        GeneReady gr;
+        if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
+
+        GeneSummary summary;
+
         if (scope == "cis") {
           if (!locp) continue;
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
-          cis_buf.clear();
-          if (need_all_snps) {
-            for (const auto& s : all_snps) {
-              if (chrom_equal(s.chrom, locp->chrom) && s.pos >= cstart && s.pos <= cend) {
-                cis_buf.push_back(s);
-              }
-            }
-          } else {
-            geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
-              cis_buf.push_back(s);
-              return true;
-            });
-          }
-          snps_ptr = &cis_buf;
+          std::vector<SnpRec> cis_snps = geno.load_region(locp->chrom, cstart, cend, mp, maf);
+          scan_gene_snps(opt, model, scope, gene, gr, locp, &cis_snps, pthr, so, summary, nullptr);
         } else if (scope == "trans") {
           if (!locp) continue;
-          const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
-          const int64_t cend = locp->tss + opt.window;
-          snps_owned.reserve(all_snps.size());
-          for (const auto& s : all_snps) {
-            if (chrom_equal(s.chrom, locp->chrom) && s.pos >= cstart && s.pos <= cend) continue;
-            snps_owned.push_back(s);
-          }
-          snps_ptr = &snps_owned;
-        } else {
-          snps_ptr = &all_snps;
+          auto stream = [&](const std::function<void(const SnpRec&)>& take) {
+            geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
+              if (in_cis_window(s, *locp, opt.window)) return true;
+              take(s);
+              return true;
+            });
+          };
+          scan_gene_snps(opt, model, scope, gene, gr, locp, nullptr, pthr, so, summary, stream);
+        } else {  // gw
+          auto stream = [&](const std::function<void(const SnpRec&)>& take) {
+            geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
+              take(s);
+              return true;
+            });
+          };
+          scan_gene_snps(opt, model, scope, gene, gr, locp, nullptr, pthr, so, summary, stream);
         }
-
-        if (!snps_ptr || snps_ptr->empty()) continue;
-
-        GeneSummary summary;
-        scan_gene_snps(opt, model, scope, gene, y, cov.X, Kptr, lmm_basis_ptr, locp, *snps_ptr, pthr,
-                       so, summary);
       }
       info("finished " + prefix);
     }

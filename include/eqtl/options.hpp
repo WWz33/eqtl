@@ -38,7 +38,7 @@ struct Options {
   bool fast = false;
   int threads = 1;
 
-  int perm = 10000;
+  int perm = 0; // gene-level permutations; 0 = off
   int seed = -1; // -1 = unset
   bool disable_beta_approx = false;
 

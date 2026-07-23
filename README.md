@@ -66,7 +66,7 @@ eqtl [options]
 | `--max-miss` | 0 | drop SNP if missing fraction > value |
 | `--maf` | 0 | min MAF (`0`=off) |
 | `--fast` | off | LMM: sparse GRM approx; glm/glmm: fix null phi/sigma2 |
-| `--perm` | 10000 | gene-level permutations (`0`=off) |
+| `--perm` | 0 | gene-level permutations (`0`=off) |
 | `--seed` | — | permutation seed |
 | `--disable-beta-approx` | off | omit beta-approximated p |
 | `-o, --out` | eqtl_out | output prefix |
@@ -111,6 +111,7 @@ S2	0.5	2.1
 | Other headers | gene IDs |
 | `lm` / `lmm` | continuous values |
 | `glm` / `glmm` | non-negative counts |
+| Missing | `NA` / `NaN` / `.` → drop that sample for the gene (GCTA-style) |
 
 ### Covariates (`-c/--covar`)
 

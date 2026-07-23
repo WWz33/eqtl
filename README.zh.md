@@ -66,7 +66,7 @@ eqtl [options]
 | `--max-miss` | 0 | 缺失比例超过该值则丢 SNP |
 | `--maf` | 0 | 最小 MAF（`0`=关） |
 | `--fast` | 关 | LMM：GRM 稀疏近似；glm/glmm：固定 null phi/sigma2 |
-| `--perm` | 10000 | 基因级置换（`0`=关） |
+| `--perm` | 0 | 基因级置换（`0`=关） |
 | `--seed` | — | 置换种子 |
 | `--disable-beta-approx` | 关 | 不写 beta 近似 p |
 | `-o, --out` | eqtl_out | 输出前缀 |
@@ -105,12 +105,13 @@ S2	0.5	2.1
 ```
 
 | 项 | |
-|----|--|
+|------|--|
 | 表头 | 必需 |
-| 第1列 | 样本 ID |
-| 其余表头 | 基因 ID |
+| 第1列 | sample ID |
+| 其余列头 | gene ID |
 | `lm` / `lmm` | 连续值 |
 | `glm` / `glmm` | 非负计数 |
+| 缺失 | `NA` / `NaN` / `.` → 该基因丢该样本（GCTA 风） |
 
 ### 协变量（`-c/--covar`）
 

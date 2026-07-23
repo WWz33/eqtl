@@ -93,7 +93,7 @@ void print_help() {
     << "        --fast             sparse GRM approx (LMM); glm/glmm: fix null phi/sigma2\n"
     << "\n"
     << "Permutation options:\n"
-    << "        --perm INT         gene-level permutations  [10000]\n"
+    << "        --perm INT         gene-level permutations  [0=off]\n"
     << "        --seed INT         permutation seed\n"
     << "        --disable-beta-approx  omit beta-approximated p\n"
     << "\n"
