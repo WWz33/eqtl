@@ -66,6 +66,7 @@ private:
   std::vector<std::string> samples_;
   std::vector<std::string> contigs_;
   std::vector<int> sample_col_;
+  SnpRec snp_reuse_;
 
   bool parse_record(void* rec, const MissPolicy& miss, SnpRec& out);
   void ensure_index_warn();

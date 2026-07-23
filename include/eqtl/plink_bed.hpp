@@ -47,7 +47,8 @@ public:
                                   const MissPolicy& miss, double maf_min);
 
 private:
-  static constexpr size_t kBlockSnps = 256;
+  // Larger sequential fread chunks (I/O only; decode math unchanged)
+  static constexpr size_t kBlockSnps = 4096;
 
   std::string prefix_;
   FILE* bed_fp_ = nullptr;
@@ -56,10 +57,13 @@ private:
   size_t n_file_ = 0;
   size_t bytes_per_snp_ = 0;
   std::vector<int> sample_col_;
-  std::vector<uint8_t> block_buf_; // kBlockSnps * bytes_per_snp_
-  // chrom_key -> [lo, hi) in sites_ (PLINK bim is contig-contiguous)
+  std::vector<uint8_t> block_buf_;
+  std::vector<char> file_buf_; // setvbuf for bed FILE*
+  // chrom_key -> [lo, hi) in sites_
   std::unordered_map<std::string, std::pair<size_t, size_t>> chrom_range_;
-  int8_t pair_lut_[4]{}; // 00,01,10,11 → dosage or -1
+  int8_t pair_lut_[4]{};
+  // Reused across SNPs in a scan (avoids per-SNP vector realloc)
+  SnpRec snp_reuse_;
 
   void read_fam(const std::string& path);
   void read_bim(const std::string& path);
@@ -67,13 +71,10 @@ private:
   void build_chrom_ranges();
   void init_lut();
   bool seek_snp(size_t snp_idx);
-  // decode one SNP row already in row (bytes_per_snp_ bytes)
   bool decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& miss, double maf_min,
                   SnpRec& out);
-  // sequential walk [lo, hi)
   bool for_each_range(size_t lo, size_t hi, const MissPolicy& miss, double maf_min,
                       const std::function<bool(const SnpRec&)>& fn);
-  // optional pos filter inside range (for region)
   bool for_each_range_pos(size_t lo, size_t hi, int64_t p0, int64_t p1, const MissPolicy& miss,
                           double maf_min, const std::function<bool(const SnpRec&)>& fn);
 };

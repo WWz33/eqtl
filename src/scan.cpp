@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <numeric>
 #include <unordered_map>
+#include <cstring>
 
 namespace eqtl {
 
@@ -100,10 +101,13 @@ Eigen::VectorXd subset_dosage(const std::vector<double>& full, const std::vector
   return g;
 }
 
-// If dosage length already equals keep size (pre-subset), use as-is
+// If dosage length already equals keep size (pre-subset), copy into VectorXd
 Eigen::VectorXd dosage_vec(const SnpRec& snp, const GeneReady& gr) {
   if (static_cast<int>(snp.dosage.size()) == static_cast<int>(gr.keep.size())) {
-    return Eigen::Map<const Eigen::VectorXd>(snp.dosage.data(), static_cast<int>(snp.dosage.size()));
+    // Explicit copy: snp may be a reused buffer overwritten on next stream step
+    Eigen::VectorXd g(static_cast<int>(snp.dosage.size()));
+    std::memcpy(g.data(), snp.dosage.data(), sizeof(double) * snp.dosage.size());
+    return g;
   }
   return subset_dosage(snp.dosage, gr.keep);
 }
@@ -382,8 +386,9 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
   }
 
   // Never load_all into double matrix for trans/gw — stream instead.
-  info(have_gff && scopes.size() == 1 && scopes[0] == "cis" ? "cis-only: region queries"
-                                                            : "trans/gw: stream SNPs (no load_all)");
+  info(have_gff && scopes.size() == 1 && scopes[0] == "cis"
+           ? "cis-only: stream region queries"
+           : "trans/gw: stream SNPs (no load_all)");
 
   for (Model model : opt.models) {
     if (needs_grm(model) && !Kptr) die("internal: GRM required");
@@ -451,8 +456,14 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           if (!locp) continue;
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
-          std::vector<SnpRec> cis_snps = geno.load_region(locp->chrom, cstart, cend, mp, maf);
-          scan_gene_snps(opt, model, scope, gene, gr, locp, &cis_snps, pthr, so, summary, nullptr);
+          // Stream region (no vector<SnpRec> materialization)
+          auto stream = [&](const std::function<void(const SnpRec&)>& take) {
+            geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
+              take(s);
+              return true;
+            });
+          };
+          scan_gene_snps(opt, model, scope, gene, gr, locp, nullptr, pthr, so, summary, stream);
         } else if (scope == "trans") {
           if (!locp) continue;
           auto stream = [&](const std::function<void(const SnpRec&)>& take) {

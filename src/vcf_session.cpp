@@ -8,6 +8,8 @@
 #include <cmath>
 #include <limits>
 #include <cstdlib>
+#include <cstring>
+#include <algorithm>
 
 namespace eqtl {
 
@@ -107,6 +109,7 @@ void VcfSession::set_sample_order(const std::vector<std::string>& sample_ids) {
     if (it == m.end()) die("sample not in VCF: " + id);
     sample_col_.push_back(it->second);
   }
+  snp_reuse_.dosage.resize(sample_col_.size());
 }
 
 std::string VcfSession::resolve_contig(const std::string& chrom) const {
@@ -131,7 +134,9 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   const int ns_all = bcf_hdr_nsamples(hdr);
   if (ns_all <= 0 || ngt_ % ns_all != 0) return false;
   const int max_pl = ngt_ / ns_all;
-  out.dosage.assign(n_an, std::numeric_limits<double>::quiet_NaN());
+  // Reuse dosage storage (same size across SNPs for fixed sample order)
+  if (static_cast<int>(out.dosage.size()) != n_an) out.dosage.resize(static_cast<size_t>(n_an));
+  std::fill(out.dosage.begin(), out.dosage.end(), std::numeric_limits<double>::quiet_NaN());
   int n_miss = 0;
   double sum = 0.0;
   int n_ok = 0;
@@ -151,7 +156,7 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
     if (!bcf_gt_is_missing(a0) && a0 != bcf_int32_vector_end) d += bcf_gt_allele(a0);
     if (max_pl > 1 && a1 != bcf_int32_vector_end && a1 != bcf_int32_missing && !bcf_gt_is_missing(a1))
       d += bcf_gt_allele(a1);
-    out.dosage[i] = static_cast<double>(d);
+    out.dosage[static_cast<size_t>(i)] = static_cast<double>(d);
     sum += d;
     ++n_ok;
   }
@@ -160,22 +165,25 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   const double miss_frac = static_cast<double>(n_miss) / static_cast<double>(n_an);
   if (miss_frac > miss.max_miss + 1e-15) return false;
   if (miss.hand == MissHand::Filter && miss.max_miss <= 0.0 && n_miss > 0) return false;
-  if (n_miss > 0) {
-    const double mu = sum / n_ok;
-    for (int i = 0; i < n_an; ++i)
-      if (!std::isfinite(out.dosage[i])) out.dosage[i] = mu;
-  }
 
-  // MAF on non-missing (GEMMA/GCTA style); gate applied by caller via maf_min
+  // MAF / QC before filling allele strings (same numeric path)
   double maf = (sum / static_cast<double>(n_ok)) / 2.0;
   if (maf > 0.5) maf = 1.0 - maf;
   if (maf < 1e-12) return false;
+
+  if (n_miss > 0) {
+    const double mu = sum / n_ok;
+    for (int i = 0; i < n_an; ++i)
+      if (!std::isfinite(out.dosage[static_cast<size_t>(i)]))
+        out.dosage[static_cast<size_t>(i)] = mu;
+  }
+
   out.maf = maf;
   out.chrom = bcf_hdr_id2name(hdr, rec->rid);
   out.pos = rec->pos + 1;
   out.ref = rec->d.allele[0] ? rec->d.allele[0] : ".";
   out.alt = rec->d.allele[1] ? rec->d.allele[1] : ".";
-  if (rec->d.id && rec->d.id[0] && std::string(rec->d.id) != ".")
+  if (rec->d.id && rec->d.id[0] && std::strcmp(rec->d.id, ".") != 0)
     out.id = rec->d.id;
   else
     out.id = out.chrom + ":" + std::to_string(out.pos) + ":" + out.ref + ":" + out.alt;
@@ -194,11 +202,10 @@ void VcfSession::for_each_snp(const MissPolicy& miss, double maf_min,
   auto* rfp = static_cast<htsFile*>(fp_);
   auto* rh = static_cast<bcf_hdr_t*>(hdr_);
   auto* rec = static_cast<bcf1_t*>(rec_);
-  SnpRec snp;
   while (bcf_read(rfp, rh, rec) == 0) {
-    if (!parse_record(rec, miss, snp)) continue;
-    if (!pass_maf_vcf(snp.maf, maf_min)) continue;
-    if (!fn(snp)) break;
+    if (!parse_record(rec, miss, snp_reuse_)) continue;
+    if (!pass_maf_vcf(snp_reuse_.maf, maf_min)) continue;
+    if (!fn(snp_reuse_)) break;
   }
 }
 
@@ -244,21 +251,20 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
     return;
   }
 
-  SnpRec snp;
   int ret = 0;
   if (idx_ && use_bcf_itr) {
     while ((ret = bcf_itr_next(rfp, itr, rec)) >= 0) {
-      if (!parse_record(rec, miss, snp)) continue;
-      if (!pass_maf_vcf(snp.maf, maf_min)) continue;
-      if (!fn(snp)) break;
+      if (!parse_record(rec, miss, snp_reuse_)) continue;
+      if (!pass_maf_vcf(snp_reuse_.maf, maf_min)) continue;
+      if (!fn(snp_reuse_)) break;
     }
   } else {
     kstring_t sstr = {0, 0, nullptr};
     while ((ret = tbx_itr_next(rfp, static_cast<tbx_t*>(tbx_), itr, &sstr)) >= 0) {
       if (vcf_parse1(&sstr, rh, rec) < 0) continue;
-      if (!parse_record(rec, miss, snp)) continue;
-      if (!pass_maf_vcf(snp.maf, maf_min)) continue;
-      if (!fn(snp)) break;
+      if (!parse_record(rec, miss, snp_reuse_)) continue;
+      if (!pass_maf_vcf(snp_reuse_.maf, maf_min)) continue;
+      if (!fn(snp_reuse_)) break;
     }
     free(sstr.s);
   }

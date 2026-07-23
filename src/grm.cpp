@@ -25,6 +25,8 @@ Grm load_grm_gcta(const std::string& prefix) {
   const uint64_t ntri = static_cast<uint64_t>(n) * (n + 1) / 2;
   FILE* fp = std::fopen((prefix + ".grm.bin").c_str(), "rb");
   if (!fp) die("cannot open " + prefix + ".grm.bin");
+  std::vector<char> iobuf(1 << 20);
+  std::setvbuf(fp, iobuf.data(), _IOFBF, iobuf.size());
   std::vector<float> buf(ntri);
   if (std::fread(buf.data(), sizeof(float), ntri, fp) != ntri)
     die("GRM bin size mismatch");
