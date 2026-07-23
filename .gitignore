@@ -3,17 +3,27 @@
 *.o
 *.a
 *.so
-data/smoke_out*
-data/tmp*
-.agents
-.claude
+
+# local scripts (not shipped)
+/scripts/
+
+# build / deps
 third_party/htslib/
 third_party/gsl/
 !third_party/eigen/
+
+# agent / IDE
+.agents
+.claude
+
+# GRM products
 *.grm.bin
 *.grm.id
 *.grm.N.bin
 
+# run caches and ad-hoc outputs
+data/smoke_out*
+data/tmp*
 data/*_*.tsv
 data/v2*
 data/hermes_*
@@ -22,3 +32,13 @@ data/r2*
 data/rv*
 data/hv_*
 data/gold_*
+data/compare_quasar/
+data/test/mini*
+data/out*
+data/*.log
+*.log
+*.nosex
+*.bed
+*.bim
+*.fam
+/tmp/
