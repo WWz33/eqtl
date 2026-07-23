@@ -64,6 +64,11 @@ AssocHit test_glm_nb(const GenePrepGlm& prep, const Eigen::VectorXd& g) {
   AssocHit h;
   h.n = prep.n;
   h.has_phi = true;
+  const double gvar = g.array().square().mean() - std::pow(g.mean(), 2);
+  if (gvar < 1e-12) {
+    h.p = 1.0;
+    return h;
+  }
   Eigen::MatrixXd Xg(prep.n, prep.X.cols() + 1);
   Xg.leftCols(prep.X.cols()) = prep.X;
   Xg.col(prep.X.cols()) = g;

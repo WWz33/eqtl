@@ -159,17 +159,39 @@ void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache
   }
 }
 
+// MAF on gene keep (dosage = A1 count 0/1/2); monomorphic → NaN p
+double subset_maf_or_nan(const Eigen::VectorXd& g, double* maf_out) {
+  const int n = static_cast<int>(g.size());
+  if (n <= 0) return std::numeric_limits<double>::quiet_NaN();
+  double sum = 0.0;
+  for (int i = 0; i < n; ++i) {
+    if (!std::isfinite(g(i))) return std::numeric_limits<double>::quiet_NaN();
+    sum += g(i);
+  }
+  double af = (sum / static_cast<double>(n)) / 2.0;
+  if (af > 0.5) af = 1.0 - af;
+  if (maf_out) *maf_out = af;
+  if (af < 1e-12) return std::numeric_limits<double>::quiet_NaN();
+  const double mean = sum / static_cast<double>(n);
+  double ss = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const double d = g(i) - mean;
+    ss += d * d;
+  }
+  if (ss < 1e-12) return std::numeric_limits<double>::quiet_NaN();
+  return af;
+}
+
 // Test one SNP; returns hit with meta filled from snp/gene
 AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp,
                   const std::string& gene, const GeneLoc* loc, GenePrepLm* lm_c, GenePrepLmm* lmm_c,
                   GenePrepGlm* glm_c, GenePrepGlmm* glmm_c, bool have_cache) {
   Eigen::VectorXd g = dosage_vec(snp, gr);
-  for (int i = 0; i < g.size(); ++i) {
-    if (!std::isfinite(g(i))) {
-      AssocHit h;
-      h.p = std::numeric_limits<double>::quiet_NaN();
-      return h;
-    }
+  double maf_sub = snp.maf;
+  if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) {
+    AssocHit h;
+    h.p = std::numeric_limits<double>::quiet_NaN();
+    return h;
   }
   AssocHit h = run_test(model, fast, gr, g, lm_c, lmm_c, glm_c, glmm_c, have_cache);
   h.gene = gene;
@@ -178,7 +200,7 @@ AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp
   h.pos = snp.pos;
   h.ref = snp.ref;
   h.alt = snp.alt;
-  h.maf = snp.maf;
+  h.maf = maf_sub;  // gene-keep MAF (matches n)
   if (loc && loc->ok) {
     h.has_tss_dist = true;
     h.tss_dist = static_cast<double>(snp.pos - loc->tss);
@@ -233,10 +255,28 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   }
   summary.acat_p = acat(pvals);
 
+  // Gene-level min-p perm. LM: shuffle residualized y (covar-adjusted exchangeability).
+  // LMM/GLM/GLMM: residual-style on y after null fit still fixes K/basis — reported as
+  // approximate; default perm=0. Stream path serializes on reader (critical).
   if (opt.perm > 0 && n_tested > 0) {
     const double T_obs = best.p;
     std::vector<double> T_perm(static_cast<size_t>(opt.perm));
     std::vector<double> perm_min_p(static_cast<size_t>(opt.perm));
+
+    // Precompute residual y for LM (Frisch–Waugh); other models shuffle raw y on keep.
+    Eigen::VectorXd y_perm_base = gr.y;
+    if (model == Model::Lm && lm_c.n > 0) {
+      y_perm_base = lm_c.y_s;
+    } else if (model == Model::Lmm || model == Model::Glmm) {
+      // Project y onto fixed effects only (leave random structure fixed — approximate)
+      if (gr.X.cols() > 0) {
+        Eigen::LDLT<Eigen::MatrixXd> ldlt(gr.X.transpose() * gr.X);
+        if (ldlt.info() == Eigen::Success) {
+          const Eigen::VectorXd b = ldlt.solve(gr.X.transpose() * gr.y);
+          y_perm_base = gr.y - gr.X * b;
+        }
+      }
+    }
 
 #pragma omp parallel for schedule(dynamic) if (opt.threads > 1)
     for (int b = 0; b < opt.perm; ++b) {
@@ -244,19 +284,19 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
                          static_cast<unsigned>(b) * 9973u +
                          static_cast<unsigned>(std::hash<std::string>{}(gene)));
 
-      std::vector<int> idx(static_cast<size_t>(gr.y.size()));
+      std::vector<int> idx(static_cast<size_t>(y_perm_base.size()));
       std::iota(idx.begin(), idx.end(), 0);
       std::shuffle(idx.begin(), idx.end(), rng_b);
 
-      // share K/basis/X; only shuffle y
       GeneReady grb;
       grb.keep = gr.keep;
       grb.X = gr.X;
       grb.K = gr.K;
       grb.basis = gr.basis;
       grb.has_basis = gr.has_basis;
-      grb.y.resize(gr.y.size());
-      for (int i = 0; i < gr.y.size(); ++i) grb.y(i) = gr.y(idx[static_cast<size_t>(i)]);
+      grb.y.resize(y_perm_base.size());
+      for (int i = 0; i < y_perm_base.size(); ++i)
+        grb.y(i) = y_perm_base(idx[static_cast<size_t>(i)]);
 
       GenePrepLm lm_b;
       GenePrepLmm lmm_b;
@@ -417,9 +457,13 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         GeneLoc loc_store;
         if (have_gff) {
           auto it = annot.find(gene);
-          if (it == annot.end()) continue;
-          loc_store = it->second;
-          locp = &loc_store;
+          if (it != annot.end()) {
+            loc_store = it->second;
+            locp = &loc_store;
+          } else if (scope != "gw") {
+            // cis/trans need TSS; gw tests all pheno genes without annotation
+            continue;
+          }
         }
 
         GeneReady gr;

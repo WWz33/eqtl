@@ -131,6 +131,12 @@ AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   Xg.col(prep.p) = g_til;
 
   const Eigen::VectorXd& dinv = prep.dinv;
+  // near-null SNP variance in spectral space → skip unstable fit
+  const double g_wss = g_til.dot(dinv.asDiagonal() * g_til);
+  if (g_wss < 1e-12) {
+    h.p = 1.0;
+    return h;
+  }
   Eigen::MatrixXd XtDX = Xg.transpose() * dinv.asDiagonal() * Xg;
   Eigen::VectorXd XtDy = Xg.transpose() * (dinv.asDiagonal() * prep.y_til);
   Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
@@ -144,16 +150,20 @@ AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   double q = prep.y_til.dot(dinv.asDiagonal() * prep.y_til) - XtDy.dot(beta);
   if (q < 0) q = 0;
   const double sigma2 = (df > 0) ? (q / df) : 1.0;
-  // se of SNP coefficient only (one solve, not full inverse)
   Eigen::VectorXd e = Eigen::VectorXd::Zero(prep.p + 1);
   e(prep.p) = 1.0;
   const Eigen::VectorXd cov_col = ldlt.solve(e);
   h.se = std::sqrt(std::max(sigma2 * cov_col(prep.p), 0.0));
   h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
   h.p = p_from_t(h.stat, df);
-  const Eigen::VectorXd r = prep.y_til - Xg * beta;
-  const double tss = prep.y_til.squaredNorm();
-  h.r2 = (tss > 0) ? (1.0 - r.squaredNorm() / tss) : 0.0;
+  // weighted residual r² in spectral space (same weights as GLS)
+  const Eigen::VectorXd fit = Xg * beta;
+  const Eigen::VectorXd resid = prep.y_til - fit;
+  const double wss_res = resid.dot(dinv.asDiagonal() * resid);
+  const double ymean = (dinv.dot(prep.y_til)) / dinv.sum();
+  const Eigen::VectorXd yc = prep.y_til.array() - ymean;
+  const double wss_tot = yc.dot(dinv.asDiagonal() * yc);
+  h.r2 = (wss_tot > 1e-15) ? std::max(0.0, 1.0 - wss_res / wss_tot) : 0.0;
   return h;
 }
 

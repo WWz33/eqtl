@@ -195,11 +195,13 @@ void VcfSession::for_each_snp(const MissPolicy& miss, double maf_min,
   auto* rfp = static_cast<htsFile*>(fp_);
   auto* rh = static_cast<bcf_hdr_t*>(hdr_);
   auto* rec = static_cast<bcf1_t*>(rec_);
-  while (bcf_read(rfp, rh, rec) == 0) {
+  int rret = 0;
+  while ((rret = bcf_read(rfp, rh, rec)) == 0) {
     if (!parse_record(rec, miss, snp_reuse_)) continue;
     if (!pass_maf(snp_reuse_.maf, maf_min)) continue;
     if (!fn(snp_reuse_)) break;
   }
+  if (rret < -1) die("VCF read error (bcf_read=" + std::to_string(rret) + "): " + path_);
 }
 
 void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, int64_t end,
@@ -251,6 +253,10 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
       if (!pass_maf(snp_reuse_.maf, maf_min)) continue;
       if (!fn(snp_reuse_)) break;
     }
+    if (ret < -1) {
+      hts_itr_destroy(itr);
+      die("VCF region read error (bcf_itr_next=" + std::to_string(ret) + "): " + path_);
+    }
   } else {
     kstring_t sstr = {0, 0, nullptr};
     while ((ret = tbx_itr_next(rfp, static_cast<tbx_t*>(tbx_), itr, &sstr)) >= 0) {
@@ -260,6 +266,10 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
       if (!fn(snp_reuse_)) break;
     }
     free(sstr.s);
+    if (ret < -1) {
+      hts_itr_destroy(itr);
+      die("VCF region read error (tbx_itr_next=" + std::to_string(ret) + "): " + path_);
+    }
   }
   hts_itr_destroy(itr);
 }

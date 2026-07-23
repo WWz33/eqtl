@@ -4,9 +4,10 @@
 
 namespace eqtl {
 
-bool looks_like_counts(const Eigen::VectorXd& y, int check_n) {
+// check_n ignored: scan all finite entries (correctness over early exit)
+bool looks_like_counts(const Eigen::VectorXd& y, int /*check_n*/) {
   int seen = 0;
-  for (int i = 0; i < y.size() && seen < check_n; ++i) {
+  for (int i = 0; i < y.size(); ++i) {
     if (!std::isfinite(y(i))) continue;
     ++seen;
     if (y(i) < 0) return false;

@@ -5,6 +5,7 @@
 #include <set>
 #include <limits>
 #include <cmath>
+#include <cstdlib>
 
 namespace eqtl {
 
@@ -89,12 +90,21 @@ CovData load_covar(const std::string& path, const std::vector<std::string>& samp
     if (line.empty() || line[0] == '#') continue;
     auto tok = split_line(line);
     if (tok.size() < 2) continue;
-    // detect header if first token not numeric-looking and second not numeric
+    // Header: col0 is sample id name (non-numeric) OR second token non-numeric.
+    // Purely numeric second field ⇒ data row (even if col0 looks like text sample id).
     if (first) {
       first = false;
-      bool second_num = true;
-      try { std::stod(tok[1]); } catch (...) { second_num = false; }
-      if (!second_num) {
+      auto is_num = [](const std::string& s) -> bool {
+        if (s.empty()) return false;
+        char* end = nullptr;
+        std::strtod(s.c_str(), &end);
+        return end && *end == '\0';
+      };
+      const bool c0_num = is_num(tok[0]);
+      const bool c1_num = is_num(tok[1]);
+      // header if second col not a number, or first col is "sample"/"id"-like non-number
+      // and all remaining tokens are non-numeric names
+      if (!c1_num || (!c0_num && !c1_num)) {
         names.assign(tok.begin() + 1, tok.end());
         continue;
       }
