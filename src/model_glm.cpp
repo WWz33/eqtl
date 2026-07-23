@@ -6,7 +6,7 @@ namespace eqtl {
 
 // Negative binomial GLM with log link.
 // Var = mu + phi * mu^2 ; weight for IRLS W = mu / (1 + phi*mu)
-// No APL (v1). --fast: estimate phi on null, fix for SNP tests.
+// No APL (v1). --fast: estimate phi on null, fix for SNP tests (glm only; LMM always null REML).
 
 static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X,
                     const Eigen::VectorXd& offset, double& phi,

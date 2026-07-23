@@ -65,7 +65,7 @@ eqtl [options]
 | `--miss-hand` | filter | `filter` \| `impute` missing GT |
 | `--max-miss` | 0 | drop SNP if missing fraction > value |
 | `--maf` | 0 | min MAF (`0`=off) |
-| `--fast` | off | share variance/dispersion params per gene |
+| `--fast` | off | LMM: sparse GRM approx; glm/glmm: fix null phi/sigma2 |
 | `--perm` | 10000 | gene-level permutations (`0`=off) |
 | `--seed` | — | permutation seed |
 | `--disable-beta-approx` | off | omit beta-approximated p |

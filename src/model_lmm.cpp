@@ -5,8 +5,11 @@
 
 namespace eqtl {
 
-// Spectral LMM: K = Q diag(lambda) Q'; Var_j ∝ delta*lambda_j + 1
-// (delta = sigma_g^2 / sigma_e^2). 1D REML profile for delta.
+// Spectral LMM (GEMMA/FaST-LMM style):
+//   K = Q diag(lambda) Q'
+//   Var ∝ delta * lambda_j + 1   (delta = sigma_g^2 / sigma_e^2)
+// Null REML for delta (fixed effects X only), then Wald tests with delta fixed.
+// No per-SNP re-REML. No score test.
 
 static double reml_negll(double delta, const Eigen::VectorXd& y_til,
                          const Eigen::MatrixXd& X_til,
@@ -28,7 +31,6 @@ static double reml_negll(double delta, const Eigen::VectorXd& y_til,
   double q = y_til.dot(dinv.asDiagonal() * y_til) - XtDy.dot(beta);
   if (q <= 0) q = 1e-12;
   double sigma2 = q / df;
-  // log|X'D^{-1}X| from LDLT diagonals (stable vs determinant())
   double logdet_x = 0.0;
   const auto& D = ldlt.vectorD();
   for (int i = 0; i < D.size(); ++i) {
@@ -36,7 +38,6 @@ static double reml_negll(double delta, const Eigen::VectorXd& y_til,
     if (di <= 0) return 1e300;
     logdet_x += std::log(di);
   }
-  // 0.5 * (df*log(sigma2) + log|D| + log|X'D^{-1}X|)
   return 0.5 * (df * std::log(sigma2) + logdet_d + logdet_x);
 }
 
@@ -46,7 +47,6 @@ static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd
   const int p = static_cast<int>(X_til.cols());
   const int df = n - p;
   if (df <= 0) return 1.0;
-  // coarse grid then golden section
   double best_d = 1.0;
   double best_ll = reml_negll(1.0, y_til, X_til, lambda, df);
   for (double d = 1e-5; d <= 1e5; d *= 2.0) {
@@ -71,6 +71,24 @@ static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd
   return 0.5 * (lo + hi);
 }
 
+void sparsify_grm(Eigen::MatrixXd& K, double abs_thr) {
+  if (abs_thr <= 0.0) return;
+  const int n = static_cast<int>(K.rows());
+  if (K.cols() != n) return;
+  size_t n_zero = 0;
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < n; ++j) {
+      if (i == j) continue;
+      if (std::abs(K(i, j)) < abs_thr) {
+        K(i, j) = 0.0;
+        ++n_zero;
+      }
+    }
+  }
+  info("fast: GRM sparse approx thr=" + std::to_string(abs_thr) +
+       " zeroed " + std::to_string(n_zero) + " off-diagonal entries");
+}
+
 LmmBasis make_lmm_basis(const Eigen::MatrixXd& K) {
   LmmBasis b;
   Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(K);
@@ -82,19 +100,18 @@ LmmBasis make_lmm_basis(const Eigen::MatrixXd& K) {
   return b;
 }
 
+// `fast` unused for LMM VC (always null REML). Kept for API parity with glm/glmm.
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const LmmBasis& basis,
-                     bool fast) {
+                     bool /*fast*/) {
   GenePrepLmm p;
   p.n = static_cast<int>(y.size());
   p.p = static_cast<int>(X.cols());
-  p.fast = fast;
   p.Q = basis.Q;
   p.lambda = basis.lambda;
   p.y_til = p.Q.transpose() * y;
   p.X_til = p.Q.transpose() * X;
-  if (fast) {
-    p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
-  }
+  // null REML: delta from X only (no SNP)
+  p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
   return p;
 }
 
@@ -108,13 +125,12 @@ AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   h.n = prep.n;
   Eigen::VectorXd g_til = prep.Q.transpose() * g;
 
-  // design: [X_til | g_til]
+  // design: [X_til | g_til]; variance components fixed from null
   Eigen::MatrixXd Xg(prep.n, prep.p + 1);
   Xg.leftCols(prep.p) = prep.X_til;
   Xg.col(prep.p) = g_til;
 
-  double delta = prep.fast ? prep.delta
-                           : optimize_delta(prep.y_til, Xg, prep.lambda);
+  const double delta = prep.delta;
 
   Eigen::VectorXd dinv(prep.n);
   for (int i = 0; i < prep.n; ++i) {
@@ -138,8 +154,8 @@ AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   Eigen::MatrixXd covb = sigma2 * ldlt.solve(Eigen::MatrixXd::Identity(prep.p + 1, prep.p + 1));
   h.se = std::sqrt(std::max(covb(prep.p, prep.p), 0.0));
   h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
+  // Wald via t (finite-sample); asymptotic N(0,1) if preferred elsewhere
   h.p = p_from_t(h.stat, df);
-  // r2 proxy on rotated residual scale
   Eigen::VectorXd fit = Xg * beta;
   Eigen::VectorXd r = prep.y_til - fit;
   double tss = prep.y_til.squaredNorm();

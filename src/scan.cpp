@@ -278,6 +278,10 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       if (m == Model::Lmm) need_lmm = true;
     }
     if (need_lmm) {
+      if (opt.fast) {
+        // --fast: sparse GRM approximation (threshold small off-diagonals)
+        sparsify_grm(Kmat, 1e-4);
+      }
       info("eigendecompose GRM once");
       lmm_basis = make_lmm_basis(Kmat);
       lmm_basis_ptr = &lmm_basis;

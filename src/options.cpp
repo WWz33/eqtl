@@ -90,7 +90,7 @@ void print_help() {
     << "        --miss-hand STR    filter|impute missing GT  [filter]\n"
     << "        --max-miss FLOAT   drop SNP if missing fraction > value  [0]\n"
     << "        --maf FLOAT        min MAF on analysis samples  [0=off]\n"
-    << "        --fast             share variance/dispersion params per gene\n"
+    << "        --fast             sparse GRM approx (LMM); glm/glmm: fix null phi/sigma2\n"
     << "\n"
     << "Permutation options:\n"
     << "        --perm INT         gene-level permutations  [10000]\n"

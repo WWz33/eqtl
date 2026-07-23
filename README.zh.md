@@ -65,7 +65,7 @@ eqtl [options]
 | `--miss-hand` | filter | 缺失 GT：`filter` \| `impute` |
 | `--max-miss` | 0 | 缺失比例超过该值则丢 SNP |
 | `--maf` | 0 | 最小 MAF（`0`=关） |
-| `--fast` | 关 | 每基因共享方差/离散参数 |
+| `--fast` | 关 | LMM：GRM 稀疏近似；glm/glmm：固定 null phi/sigma2 |
 | `--perm` | 10000 | 基因级置换（`0`=关） |
 | `--seed` | — | 置换种子 |
 | `--disable-beta-approx` | 关 | 不写 beta 近似 p |

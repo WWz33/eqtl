@@ -49,24 +49,27 @@ struct LmmBasis {
 };
 
 // Eigen-decompose GRM once per analysis (not per gene).
+// Optional: sparsify_grm before this when --fast.
 LmmBasis make_lmm_basis(const Eigen::MatrixXd& K);
+// Zero |K_ij| < abs_thr (i!=j) in place — sparse GRM approx for --fast.
+void sparsify_grm(Eigen::MatrixXd& K, double abs_thr = 1e-4);
 
 struct GenePrepLmm {
   Eigen::VectorXd y_til; // Q' y
   Eigen::MatrixXd X_til;
   Eigen::VectorXd lambda;
   Eigen::MatrixXd Q;
-  double delta = 1; // used when fast
-  bool fast = false;
+  double delta = 1; // null REML: sigma_g^2 / sigma_e^2 (fixed for SNP Wald)
   int n = 0;
   int p = 0;
 };
 
+// Null REML for delta on X only; SNP tests use fixed delta + Wald (no per-SNP re-REML).
+// `fast` ignored for LMM VC (kept for call-site symmetry with glm/glmm).
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const LmmBasis& basis,
-                     bool fast);
-// Convenience: decomposes K each call (prefer make_lmm_basis + prep_lmm).
+                     bool fast = false);
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd& K,
-                     bool fast);
+                     bool fast = false);
 AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g);
 
 struct GenePrepGlm {
