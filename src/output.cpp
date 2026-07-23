@@ -1,6 +1,8 @@
 #include "eqtl/output.hpp"
 #include "eqtl/util.hpp"
 #include <iomanip>
+#include <sstream>
+#include <cmath>
 
 namespace eqtl {
 
@@ -43,9 +45,15 @@ void write_region_header(std::ostream& os) {
 }
 
 void write_region_line(std::ostream& os, const GeneSummary& g) {
+  auto na_or = [](double v) -> std::string {
+    if (!std::isfinite(v)) return "NA";
+    std::ostringstream ss;
+    ss << v;
+    return ss.str();
+  };
   os << g.gene << '\t' << g.chrom << '\t' << g.tss << '\t' << g.n_tested << '\t' << g.n_sig << '\t'
-     << g.acat_p << '\t' << g.p_emp << '\t' << g.p_beta << '\t' << g.beta_shape1 << '\t'
-     << g.beta_shape2 << '\n';
+     << g.acat_p << '\t' << na_or(g.p_emp) << '\t' << na_or(g.p_beta) << '\t' << g.beta_shape1
+     << '\t' << g.beta_shape2 << '\n';
 }
 
 }  // namespace eqtl

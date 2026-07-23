@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <fstream>
+#include <limits>
 #include "eqtl/models.hpp"
 #include "eqtl/options.hpp"
 
@@ -13,8 +14,8 @@ struct GeneSummary {
   std::string chrom;
   int64_t tss = 0;
   double acat_p = 1;
-  double p_emp = 1;
-  double p_beta = 1;
+  double p_emp = std::numeric_limits<double>::quiet_NaN();
+  double p_beta = std::numeric_limits<double>::quiet_NaN();
   double beta_shape1 = 0;
   double beta_shape2 = 0;
   int n_tested = 0;
