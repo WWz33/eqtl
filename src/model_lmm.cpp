@@ -7,8 +7,7 @@ namespace eqtl {
 
 // Spectral LMM: K=QΛQ', Var∝δλ+1; null REML on X then fixed-δ Wald. No per-SNP re-REML.
 
-static double reml_negll(double delta, const Eigen::VectorXd& y_til,
-                         const Eigen::MatrixXd& X_til,
+static double reml_negll(double delta, const Eigen::VectorXd& y_til, const Eigen::MatrixXd& X_til,
                          const Eigen::VectorXd& lambda, int df) {
   const int n = static_cast<int>(y_til.size());
   Eigen::VectorXd dinv(n);
@@ -26,7 +25,7 @@ static double reml_negll(double delta, const Eigen::VectorXd& y_til,
   Eigen::VectorXd beta = ldlt.solve(XtDy);
   double q = y_til.dot(dinv.asDiagonal() * y_til) - XtDy.dot(beta);
   if (q <= 0) q = 1e-12;
-  double sigma2 = q / df;
+  const double sigma2 = q / df;
   double logdet_x = 0.0;
   const auto& D = ldlt.vectorD();
   for (int i = 0; i < D.size(); ++i) {
@@ -46,7 +45,7 @@ static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd
   double best_d = 1.0;
   double best_ll = reml_negll(1.0, y_til, X_til, lambda, df);
   for (double d = 1e-5; d <= 1e5; d *= 2.0) {
-    double v = reml_negll(d, y_til, X_til, lambda, df);
+    const double v = reml_negll(d, y_til, X_til, lambda, df);
     if (v < best_ll) {
       best_ll = v;
       best_d = d;
@@ -57,10 +56,10 @@ static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd
   if (hi > 1e6) hi = 1e6;
   const double phi = (1.0 + std::sqrt(5.0)) / 2.0;
   for (int it = 0; it < 40; ++it) {
-    double m1 = hi - (hi - lo) / phi;
-    double m2 = lo + (hi - lo) / phi;
-    double f1 = reml_negll(m1, y_til, X_til, lambda, df);
-    double f2 = reml_negll(m2, y_til, X_til, lambda, df);
+    const double m1 = hi - (hi - lo) / phi;
+    const double m2 = lo + (hi - lo) / phi;
+    const double f1 = reml_negll(m1, y_til, X_til, lambda, df);
+    const double f2 = reml_negll(m2, y_til, X_til, lambda, df);
     if (f1 < f2) hi = m2;
     else lo = m1;
   }
@@ -73,30 +72,36 @@ void sparsify_grm(Eigen::MatrixXd& K, double abs_thr) {
   if (K.cols() != n) return;
   size_t n_zero = 0;
   for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < n; ++j) {
-      if (i == j) continue;
+    for (int j = 0; j < i; ++j) {
       if (std::abs(K(i, j)) < abs_thr) {
         K(i, j) = 0.0;
-        ++n_zero;
+        K(j, i) = 0.0;
+        n_zero += 2;
       }
     }
   }
-  info("fast: GRM sparse approx thr=" + std::to_string(abs_thr) +
-       " zeroed " + std::to_string(n_zero) + " off-diagonal entries");
+  info("fast: GRM sparse approx thr=" + std::to_string(abs_thr) + " zeroed " +
+       std::to_string(n_zero) + " off-diagonal entries");
 }
 
 LmmBasis make_lmm_basis(const Eigen::MatrixXd& K) {
   LmmBasis b;
   Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(K);
-  if (es.info() != Eigen::Success) {
-    die("GRM eigen decomposition failed");
-  }
+  if (es.info() != Eigen::Success) die("GRM eigen decomposition failed");
   b.Q = es.eigenvectors();
   b.lambda = es.eigenvalues().cwiseMax(0.0);
   return b;
 }
 
-// `fast` unused for LMM VC (always null REML). Kept for API parity with glm/glmm.
+static void fill_dinv(GenePrepLmm& p) {
+  p.dinv.resize(p.n);
+  for (int i = 0; i < p.n; ++i) {
+    double v = p.delta * p.lambda(i) + 1.0;
+    if (v < 1e-12) v = 1e-12;
+    p.dinv(i) = 1.0 / v;
+  }
+}
+
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const LmmBasis& basis,
                      bool /*fast*/) {
   GenePrepLmm p;
@@ -106,8 +111,8 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const L
   p.lambda = basis.lambda;
   p.y_til = p.Q.transpose() * y;
   p.X_til = p.Q.transpose() * X;
-  // null REML: delta from X only (no SNP)
   p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
+  fill_dinv(p);
   return p;
 }
 
@@ -119,21 +124,13 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const E
 AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   AssocHit h;
   h.n = prep.n;
-  Eigen::VectorXd g_til = prep.Q.transpose() * g;
+  const Eigen::VectorXd g_til = prep.Q.transpose() * g;
 
-  // design: [X_til | g_til]; variance components fixed from null
   Eigen::MatrixXd Xg(prep.n, prep.p + 1);
   Xg.leftCols(prep.p) = prep.X_til;
   Xg.col(prep.p) = g_til;
 
-  const double delta = prep.delta;
-
-  Eigen::VectorXd dinv(prep.n);
-  for (int i = 0; i < prep.n; ++i) {
-    double v = delta * prep.lambda(i) + 1.0;
-    if (v < 1e-12) v = 1e-12;
-    dinv(i) = 1.0 / v;
-  }
+  const Eigen::VectorXd& dinv = prep.dinv;
   Eigen::MatrixXd XtDX = Xg.transpose() * dinv.asDiagonal() * Xg;
   Eigen::VectorXd XtDy = Xg.transpose() * (dinv.asDiagonal() * prep.y_til);
   Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
@@ -141,20 +138,21 @@ AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
     h.p = 1.0;
     return h;
   }
-  Eigen::VectorXd beta = ldlt.solve(XtDy);
+  const Eigen::VectorXd beta = ldlt.solve(XtDy);
   h.beta = beta(prep.p);
   const int df = prep.n - prep.p - 1;
   double q = prep.y_til.dot(dinv.asDiagonal() * prep.y_til) - XtDy.dot(beta);
   if (q < 0) q = 0;
-  double sigma2 = (df > 0) ? (q / df) : 1.0;
-  Eigen::MatrixXd covb = sigma2 * ldlt.solve(Eigen::MatrixXd::Identity(prep.p + 1, prep.p + 1));
-  h.se = std::sqrt(std::max(covb(prep.p, prep.p), 0.0));
+  const double sigma2 = (df > 0) ? (q / df) : 1.0;
+  // se of SNP coefficient only (one solve, not full inverse)
+  Eigen::VectorXd e = Eigen::VectorXd::Zero(prep.p + 1);
+  e(prep.p) = 1.0;
+  const Eigen::VectorXd cov_col = ldlt.solve(e);
+  h.se = std::sqrt(std::max(sigma2 * cov_col(prep.p), 0.0));
   h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
-  // Wald via t (finite-sample); asymptotic N(0,1) if preferred elsewhere
   h.p = p_from_t(h.stat, df);
-  Eigen::VectorXd fit = Xg * beta;
-  Eigen::VectorXd r = prep.y_til - fit;
-  double tss = prep.y_til.squaredNorm();
+  const Eigen::VectorXd r = prep.y_til - Xg * beta;
+  const double tss = prep.y_til.squaredNorm();
   h.r2 = (tss > 0) ? (1.0 - r.squaredNorm() / tss) : 0.0;
   return h;
 }

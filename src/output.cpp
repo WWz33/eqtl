@@ -78,7 +78,7 @@ void write_region_line(std::ostream& os, const GeneSummary& g) {
       buf, sizeof(buf), "%s\t%s\t%lld\t%d\t%d\t%.10g\t%s\t%s\t%.10g\t%.10g\n", g.gene.c_str(),
       g.chrom.c_str(), static_cast<long long>(g.tss), g.n_tested, g.n_sig, g.acat_p, p_emp, p_beta,
       g.beta_shape1, g.beta_shape2);
-  if (n > 0) os.write(buf, n);
+  if (n > 0 && static_cast<size_t>(n) < sizeof(buf)) os.write(buf, n);
 }
 
 }  // namespace eqtl
