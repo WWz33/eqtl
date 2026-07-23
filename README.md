@@ -28,7 +28,8 @@ eqtl [options]
 |------|---------|--------|
 | `-v, --vcf` | required | VCF/BCF genotypes (GT) |
 | `-e, --pheno` | required* | phenotype matrix (col1=sample) |
-| `-g, --gff` | — | GFF3; omit → genome-wide pairs |
+| `-g, --gff` | — | GFF3 gene features |
+| `--gff-id-key` | — | GFF attribute for gene id |
 | `-c, --covar` | — | covariates |
 | `-k, --grm` | — | relatedness prefix `.grm.id`/`.grm.bin` |
 | `--make-grm` | off | write relatedness matrix and exit |
@@ -52,12 +53,7 @@ eqtl [options]
 
 ### Genotypes (`-v/--vcf`)
 
-VCF or BCF. Reads GT only (0/1/2). Ignores DS.
-
-- Multiallelic sites skipped.
-- Sample IDs match phenotype / covar / GRM by string.
-- Cis: uses TBI/CSI when present; otherwise sequential scan.
-- Missing GT:
+VCF/BCF. Field **GT** only (0/1/2). Multiallelic sites not used.
 
 | `--miss-hand` | `--max-miss` | Effect |
 |---------------|--------------|--------|
@@ -67,7 +63,7 @@ VCF or BCF. Reads GT only (0/1/2). Ignores DS.
 
 ### Phenotype (`-e/--pheno`)
 
-TSV: row = sample, columns = genes.
+TSV, row = sample, columns = genes.
 
 ```text
 sample	geneA	geneB
@@ -75,12 +71,15 @@ S1	1.2	3.4
 S2	0.5	2.1
 ```
 
-- Header required. Col1 = sample ID; other headers = gene IDs.
-- `lm`/`lmm`: continuous. `glm`/`glmm`: non-negative counts.
-- Gene with any NA: skipped.
-- Analysis samples = VCF ∩ pheno (∩ covar if given).
+| Rule | |
+|------|--|
+| Header | required |
+| Col1 | sample ID |
+| Other headers | gene IDs |
+| `lm` / `lmm` | continuous values |
+| `glm` / `glmm` | non-negative counts |
 
-### Covariates (`-c/--covar`, optional)
+### Covariates (`-c/--covar`)
 
 ```text
 sample_id	cov1	cov2
@@ -88,33 +87,29 @@ S1	0	1.2
 S2	1	0.3
 ```
 
-- Col1 = sample ID. Other columns = covariates.
-- Adds intercept if no constant column.
-- Samples must be in the analysis set.
+Col1 = sample ID; remaining columns = covariates.
 
-### Annotation (`-g/--gff`, optional)
+### Annotation (`-g/--gff`)
 
-GFF3 `gene` features. Gene id from attribute `ID`, else `Name` / `gene_id` (`--gff-id-key` overrides).
+GFF3 `gene` lines. Gene id from `ID`, else `Name` / `gene_id` (override with `--gff-id-key`).
 
-- TSS: `+` → start; `−` → end (GFF 1-based).
-- Cis interval: `[TSS−W, TSS+W]` (`-w` bp).
-- Chromosome names matched with optional `chr` prefix stripped for equality.
-- No GFF → `gw` all-pairs (log line).
-- 0 GFF hits for a gene: skip. Multiple hits: warn and skip.
+| Item | Definition |
+|------|------------|
+| TSS | `+` → start; `−` → end (GFF 1-based) |
+| cis interval | `[TSS−W, TSS+W]` (`-w`, bp) |
 
-### Relatedness (`-k/--grm`, optional)
+### Relatedness (`-k/--grm`)
 
 | File | Content |
 |------|---------|
 | `{prefix}.grm.id` | one sample per line; `FID IID` → IID, or single ID |
 | `{prefix}.grm.bin` | float32 lower triangle incl. diagonal; order = `.id` |
 
-- `lmm`/`glmm` without `-k`: GRM from VCF on overlap samples.
-- `--make-grm`: write the two files and exit.
+`--make-grm` writes the two files and exits.
 
 ## Output files
 
-Prefix `-o PREFIX`. Uncompressed TSV. Per model and scope:
+Prefix `-o PREFIX`. Uncompressed TSV per model and scope:
 
 ```text
 {PREFIX}.{model}.{scope}.pairs.tsv
@@ -134,19 +129,19 @@ Rows with `p ≤ --pval-cis` (cis) or `p ≤ --pval-trans` (trans/gw).
 | `snp` | variant ID or `chrom:pos:ref:alt` |
 | `chrom` | contig |
 | `pos` | 1-based position |
-| `ref` / `alt` | alleles; beta is on alt dosage |
-| `maf` | MAF in analysis samples |
+| `ref` / `alt` | alleles; beta on alt dosage |
+| `maf` | MAF |
 | `beta` / `se` / `stat` / `p` | association |
 | `r2` | r² |
 | `n` | sample size |
-| `tss_dist` | `pos − TSS` (bp); `NA` without GFF |
+| `tss_dist` | `pos − TSS` (bp); `NA` if no TSS |
 | `scope` | `cis` / `trans` / `gw` |
 | `phi` | NB dispersion (`glm` only) |
 | `glm_converged` / `glmm_converged` | 1/0 |
 
 ### `{scope}.top.tsv`
 
-Same columns as pairs. At most one row per gene: lowest-p SNP if it passes the same p threshold.
+Same columns as pairs. At most one row per gene (lowest p among rows that pass the p threshold).
 
 ### `{scope}.region.tsv`
 
@@ -154,7 +149,7 @@ Same columns as pairs. At most one row per gene: lowest-p SNP if it passes the s
 |--------|---------|
 | `gene` | gene ID |
 | `chrom` | contig |
-| `tss` | TSS (0 if unknown) |
+| `tss` | TSS |
 | `n_tested` | SNPs tested |
 | `n_sig` | SNPs in pairs |
 | `acat_p` | ACAT of SNP p-values |
@@ -169,12 +164,9 @@ Same columns as pairs. At most one row per gene: lowest-p SNP if it passes the s
 {PREFIX}.grm.bin
 ```
 
-## Sample data
+## Citation
 
-| Path | Contents |
-|------|----------|
-| `data/smoke.*` | small VCF, pheno, GFF, covar |
-| `data/test/` | larger panel |
+See repository release notes / paper when available.
 
 ## License
 

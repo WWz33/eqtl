@@ -28,7 +28,8 @@ eqtl [options]
 |------|------|------|
 | `-v, --vcf` | 必选 | VCF/BCF 基因型（GT） |
 | `-e, --pheno` | 必选* | 表型矩阵（第1列 sample） |
-| `-g, --gff` | — | GFF3；省略则全基因组 pair |
+| `-g, --gff` | — | GFF3 gene 特征 |
+| `--gff-id-key` | — | GFF 基因 ID 属性名 |
 | `-c, --covar` | — | 协变量 |
 | `-k, --grm` | — | 亲缘矩阵前缀 `.grm.id`/`.grm.bin` |
 | `--make-grm` | 关 | 写亲缘矩阵后退出 |
@@ -52,12 +53,7 @@ eqtl [options]
 
 ### 基因型（`-v/--vcf`）
 
-VCF/BCF。只读 GT（0/1/2）。忽略 DS。
-
-- 多等位位点跳过。
-- 样本 ID 与表型/协变量/GRM 字符串一致。
-- cis：有 TBI/CSI 则区查，否则顺序扫。
-- 缺失 GT：
+VCF/BCF。仅用 **GT**（0/1/2）。多等位位点不使用。
 
 | `--miss-hand` | `--max-miss` | 效果 |
 |---------------|--------------|------|
@@ -75,12 +71,15 @@ S1	1.2	3.4
 S2	0.5	2.1
 ```
 
-- 须有表头。第1列=样本 ID；其余表头=基因 ID。
-- `lm`/`lmm`：连续值。`glm`/`glmm`：非负计数。
-- 基因含 NA → 跳过该基因。
-- 分析样本 = VCF ∩ pheno（有 covar 再交）。
+| 项 | |
+|----|--|
+| 表头 | 必需 |
+| 第1列 | 样本 ID |
+| 其余表头 | 基因 ID |
+| `lm` / `lmm` | 连续值 |
+| `glm` / `glmm` | 非负计数 |
 
-### 协变量（`-c/--covar`，可选）
+### 协变量（`-c/--covar`）
 
 ```text
 sample_id	cov1	cov2
@@ -88,33 +87,29 @@ S1	0	1.2
 S2	1	0.3
 ```
 
-- 第1列=样本 ID；其余=协变量。
-- 无常数列时加截距。
-- 样本须属于分析集。
+第1列=样本 ID；其余列=协变量。
 
-### 注释（`-g/--gff`，可选）
+### 注释（`-g/--gff`）
 
-GFF3 的 `gene`。基因 ID 取属性 `ID`，否则 `Name`/`gene_id`（`--gff-id-key` 可改）。
+GFF3 `gene` 行。基因 ID 取 `ID`，否则 `Name` / `gene_id`（可用 `--gff-id-key`）。
 
-- TSS：`+`→start，`−`→end（GFF 1-based）。
-- cis 区间：`[TSS−W, TSS+W]`（`-w`，bp）。
-- 染色体名匹配时去掉可选 `chr` 前缀再比。
-- 无 GFF → `gw` 全 pair（日志说明）。
-- 0 命中 skip；多命中 warn+skip。
+| 项 | 定义 |
+|----|------|
+| TSS | `+`→start；`−`→end（GFF 1-based） |
+| cis 区间 | `[TSS−W, TSS+W]`（`-w`，bp） |
 
-### 亲缘矩阵（`-k/--grm`，可选）
+### 亲缘矩阵（`-k/--grm`）
 
 | 文件 | 内容 |
 |------|------|
 | `{prefix}.grm.id` | 每行一个样本；`FID IID` 用 IID，或单列 ID |
 | `{prefix}.grm.bin` | float32 下三角（含对角）；顺序同 `.id` |
 
-- `lmm`/`glmm` 无 `-k`：在 overlap 样本上从 VCF 计算 GRM。
-- `--make-grm`：写上述两文件后退出。
+`--make-grm` 写上述两文件后退出。
 
 ## 输出文件
 
-前缀 `-o PREFIX`。明文 TSV。每个 model×scope：
+前缀 `-o PREFIX`。明文 TSV，每个 model×scope：
 
 ```text
 {PREFIX}.{model}.{scope}.pairs.tsv
@@ -126,7 +121,7 @@ GFF3 的 `gene`。基因 ID 取属性 `ID`，否则 `Name`/`gene_id`（`--gff-id
 
 ### `{scope}.pairs.tsv`
 
-仅 `p ≤ --pval-cis`（cis）或 `p ≤ --pval-trans`（trans/gw）。
+`p ≤ --pval-cis`（cis）或 `p ≤ --pval-trans`（trans/gw）的行。
 
 | 列 | 含义 |
 |----|------|
@@ -135,18 +130,18 @@ GFF3 的 `gene`。基因 ID 取属性 `ID`，否则 `Name`/`gene_id`（`--gff-id
 | `chrom` | contig |
 | `pos` | 1-based 坐标 |
 | `ref` / `alt` | 等位基因；beta 对应 alt 剂量 |
-| `maf` | 分析样本 MAF |
+| `maf` | MAF |
 | `beta` / `se` / `stat` / `p` | 关联 |
 | `r2` | r² |
 | `n` | 样本量 |
-| `tss_dist` | `pos − TSS`（bp）；无 GFF 为 `NA` |
+| `tss_dist` | `pos − TSS`（bp）；无 TSS 为 `NA` |
 | `scope` | `cis` / `trans` / `gw` |
 | `phi` | NB 离散参数（仅 `glm`） |
 | `glm_converged` / `glmm_converged` | 1/0 |
 
 ### `{scope}.top.tsv`
 
-列同 pairs。每基因至多一行：最小 p 的 SNP，且该 SNP 过同一 p 阈。
+列同 pairs。每基因至多一行（过 p 阈中最小 p 的 SNP）。
 
 ### `{scope}.region.tsv`
 
@@ -154,7 +149,7 @@ GFF3 的 `gene`。基因 ID 取属性 `ID`，否则 `Name`/`gene_id`（`--gff-id
 |----|------|
 | `gene` | 基因 ID |
 | `chrom` | contig |
-| `tss` | TSS（未知为 0） |
+| `tss` | TSS |
 | `n_tested` | 检验 SNP 数 |
 | `n_sig` | pairs 中 SNP 数 |
 | `acat_p` | SNP p 的 ACAT |
@@ -169,12 +164,9 @@ GFF3 的 `gene`。基因 ID 取属性 `ID`，否则 `Name`/`gene_id`（`--gff-id
 {PREFIX}.grm.bin
 ```
 
-## 示例数据
+## Citation
 
-| 路径 | 内容 |
-|------|------|
-| `data/smoke.*` | 小规模 VCF、表型、GFF、协变量 |
-| `data/test/` | 可选更大面板 |
+见仓库 release / 论文（如有）。
 
 ## License
 
