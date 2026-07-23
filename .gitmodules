@@ -5,3 +5,7 @@
 	path = third_party/htslib
 	url = https://github.com/samtools/htslib.git
 	version = 1.24
+[submodule "third_party/OpenBLAS"]
+	path = third_party/OpenBLAS
+	url = https://github.com/OpenMathLib/OpenBLAS.git
+	version = 0.3.28

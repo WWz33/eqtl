@@ -25,6 +25,19 @@ third_party/gffsub/**/*.o
 !third_party/eigen/
 !third_party/gffsub/
 !third_party/htslib/
+!third_party/OpenBLAS/
+
+# OpenBLAS build products (submodule sources tracked)
+third_party/OpenBLAS/*.o
+third_party/OpenBLAS/**/*.o
+third_party/OpenBLAS/libopenblas*.a
+third_party/OpenBLAS/libopenblas.so*
+third_party/OpenBLAS/config.h
+third_party/OpenBLAS/Makefile.conf
+third_party/OpenBLAS/config_last.h
+third_party/OpenBLAS/Makefile_kernel.conf
+third_party/OpenBLAS/*.pcl
+third_party/OpenBLAS/exports/libopenblas*
 
 # agent / IDE
 .agents

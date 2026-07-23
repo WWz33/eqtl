@@ -13,7 +13,6 @@
 ```bash
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
-# make USE_OPENBLAS=0  # 无 OpenBLAS 时纯 Eigen
 
 # 用 --vcf 时建索引（bcftools）
 bcftools index -t data/smoke.vcf.gz
