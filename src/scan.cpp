@@ -278,12 +278,13 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       if (m == Model::Lmm) need_lmm = true;
     }
     if (need_lmm) {
+      // LMM eigenbasis: optional sparse approx must not mutate K used by glmm
+      Eigen::MatrixXd K_lmm = Kmat;
       if (opt.fast) {
-        // --fast: sparse GRM approximation (threshold small off-diagonals)
-        sparsify_grm(Kmat, 1e-4);
+        sparsify_grm(K_lmm, 1e-4);
       }
       info("eigendecompose GRM once");
-      lmm_basis = make_lmm_basis(Kmat);
+      lmm_basis = make_lmm_basis(K_lmm);
       lmm_basis_ptr = &lmm_basis;
     }
   }
