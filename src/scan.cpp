@@ -294,8 +294,12 @@ int run_eqtl(const Options& opt) {
     all_snps = vcf.load_all(mp, -1);
     info("SNPs loaded: " + std::to_string(all_snps.size()));
   } else {
-    info("cis-only: region queries (indexed when available)");
+    info("cis-only: shared VCF session + region queries (index via bcftools)");
   }
+
+  // Reuse cis region buffer across genes (avoids per-gene allocator churn)
+  std::vector<SnpRec> cis_buf;
+  cis_buf.reserve(8192);
 
   for (Model model : opt.models) {
     if (needs_grm(model) && !Kptr) {
@@ -311,6 +315,13 @@ int run_eqtl(const Options& opt) {
       if (!so.pairs || !so.top || !so.region) {
         die("cannot open output for " + prefix);
       }
+      // larger stream buffers for pair-heavy runs
+      static char pairs_buf[1 << 20];
+      static char top_buf[1 << 16];
+      static char region_buf[1 << 16];
+      so.pairs.rdbuf()->pubsetbuf(pairs_buf, sizeof(pairs_buf));
+      so.top.rdbuf()->pubsetbuf(top_buf, sizeof(top_buf));
+      so.region.rdbuf()->pubsetbuf(region_buf, sizeof(region_buf));
       write_pairs_header(so.pairs, model);
       write_top_header(so.top, model);
       write_region_header(so.region);
@@ -344,45 +355,53 @@ int run_eqtl(const Options& opt) {
           locp = &loc_store;
         }
 
-        std::vector<SnpRec> snps;
+        std::vector<SnpRec>* snps_ptr = nullptr;
+        std::vector<SnpRec> snps_owned;
         if (scope == "cis") {
           if (!locp) {
             continue;
           }
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
+          cis_buf.clear();
           if (need_all_snps) {
             for (const auto& s : all_snps) {
               if (chrom_equal(s.chrom, locp->chrom) && s.pos >= cstart && s.pos <= cend) {
-                snps.push_back(s);
+                cis_buf.push_back(s);
               }
             }
           } else {
-            snps = vcf.load_region(locp->chrom, cstart, cend, mp);
+            vcf.for_each_snp_region(locp->chrom, cstart, cend, mp, [&](const SnpRec& s) {
+              cis_buf.push_back(s);
+              return true;
+            });
           }
+          snps_ptr = &cis_buf;
         } else if (scope == "trans") {
           if (!locp) {
             continue;
           }
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
+          snps_owned.reserve(all_snps.size());
           for (const auto& s : all_snps) {
             if (chrom_equal(s.chrom, locp->chrom) && s.pos >= cstart && s.pos <= cend) {
               continue;
             }
-            snps.push_back(s);
+            snps_owned.push_back(s);
           }
+          snps_ptr = &snps_owned;
         } else {  // gw
-          snps = all_snps;
+          snps_ptr = &all_snps;
         }
 
-        if (snps.empty()) {
+        if (!snps_ptr || snps_ptr->empty()) {
           continue;
         }
 
         GeneSummary summary;
-        scan_gene_snps(opt, model, scope, gene, y, cov.X, Kptr, lmm_basis_ptr, locp, snps, pthr, so,
-                       summary);
+        scan_gene_snps(opt, model, scope, gene, y, cov.X, Kptr, lmm_basis_ptr, locp, *snps_ptr, pthr,
+                       so, summary);
       }
       info("finished " + prefix);
     }

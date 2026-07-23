@@ -11,8 +11,11 @@ cis/trans eQTL from VCF and a sample×gene phenotype matrix.
 ## Getting Started
 
 ```bash
-git clone https://github.com/WWz33/eqtl.git
+git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
+
+# index genotypes (bcftools; CSI or TBI)
+bcftools index -t data/smoke.vcf.gz
 
 # GRM via GCTA (PLINK bed from smoke VCF)
 plink --vcf data/smoke.vcf.gz --make-bed --out data/smoke
@@ -22,6 +25,13 @@ gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 ./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
   -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute \
   -o data/out
+```
+
+BCF + CSI is preferred for large panels:
+
+```bash
+bcftools view -Ob -o panel.bcf panel.vcf.gz
+bcftools index panel.bcf
 ```
 
 ## Usage
@@ -60,6 +70,16 @@ eqtl [options]
 ### Genotypes (`-v/--vcf`)
 
 VCF/BCF. Field **GT** only (0/1/2). Multiallelic sites not used.
+
+Index with **bcftools** (not built into `eqtl`):
+
+```bash
+bcftools index -t panel.vcf.gz    # TBI
+# or
+bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf   # CSI
+```
+
+Without CSI/TBI, region (cis) queries scan the whole file.
 
 | `--miss-hand` | `--max-miss` | Effect |
 |---------------|--------------|--------|

@@ -23,6 +23,8 @@ struct MissPolicy {
   double max_miss = 0.0; // drop if n_miss/n > max_miss
 };
 
+// Single open htsFile + header for the process. Region/full scans do not reopen.
+// Index files: build with bcftools (see README); this class only loads them.
 class VcfSession {
 public:
   VcfSession() = default;
@@ -48,11 +50,14 @@ public:
 
 private:
   std::string path_;
-  void* fp_ = nullptr;
-  void* hdr_ = nullptr;
-  void* active_hdr_ = nullptr;
-  void* tbx_ = nullptr;
-  void* idx_ = nullptr;
+  void* fp_ = nullptr;   // htsFile*
+  void* hdr_ = nullptr;  // bcf_hdr_t*
+  void* tbx_ = nullptr;  // tbx_t*
+  void* idx_ = nullptr;  // hts_idx_t* (CSI/BCF)
+  void* rec_ = nullptr;  // bcf1_t* reused
+  int32_t* gt_ = nullptr;
+  int ngt_ = 0;
+  int64_t data_off_ = 0; // file offset after header (bgzf tell)
   bool indexed_ = false;
   bool warned_no_index_ = false;
   std::vector<std::string> samples_;
@@ -61,6 +66,8 @@ private:
 
   bool parse_record(void* rec, const MissPolicy& miss, SnpRec& out);
   void ensure_index_warn();
+  bool rewind_to_data();
+  std::string resolve_contig(const std::string& chrom) const;
 };
 
 } // namespace eqtl

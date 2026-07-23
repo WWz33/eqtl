@@ -11,8 +11,11 @@
 ## Getting Started
 
 ```bash
-git clone https://github.com/WWz33/eqtl.git
+git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
+
+# 基因型索引（bcftools；CSI 或 TBI）
+bcftools index -t data/smoke.vcf.gz
 
 # 用 GCTA 算 GRM（先从 smoke VCF 转 PLINK bed）
 plink --vcf data/smoke.vcf.gz --make-bed --out data/smoke
@@ -22,6 +25,13 @@ gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 ./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
   -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute \
   -o data/out
+```
+
+大面板推荐 BCF + CSI：
+
+```bash
+bcftools view -Ob -o panel.bcf panel.vcf.gz
+bcftools index panel.bcf
 ```
 
 ## Usage
@@ -60,6 +70,16 @@ eqtl [options]
 ### 基因型（`-v/--vcf`）
 
 VCF/BCF。仅用 **GT**（0/1/2）。多等位位点不使用。
+
+索引用 **bcftools**（本程序不生成索引）：
+
+```bash
+bcftools index -t panel.vcf.gz    # TBI
+# 或
+bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf   # CSI
+```
+
+无 CSI/TBI 时，cis 区域查询会扫全文件。
 
 | `--miss-hand` | `--max-miss` | 效果 |
 |---------------|--------------|------|
