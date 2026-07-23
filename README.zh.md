@@ -116,7 +116,7 @@ S2	0.5	2.1
 ### 协变量（`-c/--covar`）
 
 ```text
-sample_id	cov1	cov2
+sample	cov1	cov2
 S1	0	1.2
 S2	1	0.3
 ```
