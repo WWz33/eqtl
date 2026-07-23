@@ -174,7 +174,7 @@ Same columns as pairs. At most one row per gene: lowest-p SNP if it passes the s
 | Path | Contents |
 |------|----------|
 | `data/smoke.*` | small VCF, pheno, GFF, covar |
-| `data/test/` | optional larger panel |
+| `data/test/` | larger panel |
 
 ## License
 
