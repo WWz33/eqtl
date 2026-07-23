@@ -13,6 +13,7 @@ cis/trans eQTL from VCF/BCF or PLINK bed and a sample×gene phenotype matrix.
 ```bash
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
+# make USE_OPENBLAS=0  # pure Eigen if OpenBLAS unavailable
 
 # index genotypes (bcftools; CSI or TBI) when using --vcf
 bcftools index -t data/smoke.vcf.gz
