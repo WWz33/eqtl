@@ -206,7 +206,8 @@ int run_make_grm(const Options& opt) {
       die("no overlapping samples for GRM");
     }
   }
-  Grm g = compute_grm(vcf, samples, opt.miss);
+  MissPolicy mp{opt.miss, opt.max_miss};
+  Grm g = compute_grm(vcf, samples, mp);
   write_grm_gcta(opt.out, g);
   return 0;
 }
@@ -265,7 +266,8 @@ int run_eqtl(const Options& opt) {
       grm = slice_grm(load_grm_gcta(opt.grm), sample_order);
     } else {
       info("computing GRM from VCF (overlap samples)");
-      grm = compute_grm(vcf, sample_order, opt.miss);
+      MissPolicy mp{opt.miss, opt.max_miss};
+      grm = compute_grm(vcf, sample_order, mp);
     }
     Kmat = grm.K;
     Kptr = &Kmat;
@@ -282,11 +284,18 @@ int run_eqtl(const Options& opt) {
     }
   }
 
-  // Load SNPs once for cis/trans/gw (sequential stream; avoids per-gene full VCF rescans).
+  MissPolicy mp{opt.miss, opt.max_miss};
+  const bool need_all_snps =
+      std::find(scopes.begin(), scopes.end(), "trans") != scopes.end() ||
+      std::find(scopes.begin(), scopes.end(), "gw") != scopes.end();
   std::vector<SnpRec> all_snps;
-  info("loading SNPs (stream)");
-  all_snps = vcf.load_all(opt.miss, -1);
-  info("SNPs loaded: " + std::to_string(all_snps.size()));
+  if (need_all_snps) {
+    info("loading SNPs (stream)");
+    all_snps = vcf.load_all(mp, -1);
+    info("SNPs loaded: " + std::to_string(all_snps.size()));
+  } else {
+    info("cis-only: region queries (indexed when available)");
+  }
 
   for (Model model : opt.models) {
     if (needs_grm(model) && !Kptr) {
@@ -342,10 +351,14 @@ int run_eqtl(const Options& opt) {
           }
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
-          for (const auto& s : all_snps) {
-            if (s.chrom == locp->chrom && s.pos >= cstart && s.pos <= cend) {
-              snps.push_back(s);
+          if (need_all_snps) {
+            for (const auto& s : all_snps) {
+              if (chrom_equal(s.chrom, locp->chrom) && s.pos >= cstart && s.pos <= cend) {
+                snps.push_back(s);
+              }
             }
+          } else {
+            snps = vcf.load_region(locp->chrom, cstart, cend, mp);
           }
         } else if (scope == "trans") {
           if (!locp) {
@@ -354,7 +367,7 @@ int run_eqtl(const Options& opt) {
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
           for (const auto& s : all_snps) {
-            if (s.chrom == locp->chrom && s.pos >= cstart && s.pos <= cend) {
+            if (chrom_equal(s.chrom, locp->chrom) && s.pos >= cstart && s.pos <= cend) {
               continue;
             }
             snps.push_back(s);

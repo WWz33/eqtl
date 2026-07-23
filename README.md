@@ -38,6 +38,7 @@ eqtl [options]
 | `--pval-cis` | 1e-5 | cis output p threshold |
 | `--pval-trans` | 1e-5 | trans/gw output p threshold |
 | `--miss-hand` | filter | `filter` \| `impute` missing GT |
+| `--max-miss` | 0 | drop SNP if missing fraction > value |
 | `--fast` | off | share variance/dispersion params per gene |
 | `--perm` | 10000 | gene-level permutations (`0`=off) |
 | `--seed` | — | permutation seed |

@@ -59,6 +59,22 @@ std::vector<std::string> intersect_order(
   return out;
 }
 
+
+std::string chrom_key(const std::string& chrom) {
+  if (chrom.size() >= 3) {
+    char c0 = static_cast<char>(std::tolower(static_cast<unsigned char>(chrom[0])));
+    char c1 = static_cast<char>(std::tolower(static_cast<unsigned char>(chrom[1])));
+    char c2 = static_cast<char>(std::tolower(static_cast<unsigned char>(chrom[2])));
+    if (c0 == 'c' && c1 == 'h' && c2 == 'r') return chrom.substr(3);
+  }
+  return chrom;
+}
+
+bool chrom_equal(const std::string& a, const std::string& b) {
+  if (a == b) return true;
+  return chrom_key(a) == chrom_key(b);
+}
+
 static double erfc_approx(double x) {
   // Abramowitz-Stegun 7.1.26
   double z = std::fabs(x);

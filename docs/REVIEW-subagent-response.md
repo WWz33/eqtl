@@ -1,33 +1,27 @@
-# Subagent review response (deleg_1bf96b74)
+# Subagent review response (deleg_1bf96b74) — updated
 
-Review timestamp was ~04:08; several items were already fixed in `be4719c` before/around review.
+## Closed vs open
 
-## Already fixed (before or independent of this batch)
+| Review item | Status |
+|-------------|--------|
+| LMM eig every gene | **Fixed** (`make_lmm_basis` once) |
+| cis full-VCF per gene | **Fixed** (cis-only: TBI/CSI region query; all/trans: load once) |
+| residualise+score | never shipped |
+| GT only / four models / CLI shape | OK |
+| LMM logdet via determinant | **Fixed** (LDLT `vectorD` log-sum) |
+| `--thread` unused | **Fixed** (OpenMP over SNPs within gene) |
+| seed=-1 fixed to 1 | **Fixed** (`random_device`) |
+| help missing `gw` | **Fixed** |
+| `for_each_snp_region` stub | **Fixed** (CSI/`bcf_itr` or TBI/`tbx_itr`; fallback sequential) |
+| chrom `chr1` vs `1` | **Fixed** (`chrom_equal` / `chrom_key`) |
+| miss filter too strict only | **Improved** (`--max-miss FLOAT` [0]) |
+| lm numeric gold | **Added** `scripts/gold_lm.py` (numpy OLS; smoke row ≤1e-4 beta/se) |
+| `--perm` default cost | **Open** (skeleton works; default 10000 still heavy) |
+| pheno per-sample NA | **Open** |
+| GEMMA lmm gold | **Open** |
+| vendored htslib default | **Open** (`USE_SYSTEM_HTS=1`) |
+| gene-level OpenMP + thread-local writes | **Open** (SNP-parallel only) |
 
-| Review critical | Status in tree now |
-|-----------------|-------------------|
-| LMM eig every gene | **Fixed**: `make_lmm_basis` once in `run_eqtl` |
-| cis full-VCF per gene | **Fixed**: load `all_snps` once; cis/trans filter in memory |
-| residualise+score product | **OK** (never shipped) |
-| GT only, models, CLI shape | **OK** |
+## Verify (ad-hoc)
 
-## Fixed in this follow-up
-
-1. LMM REML `log|X'D^{-1}X|` via LDLT `vectorD()` log-sum (not `determinant()`)
-2. `--thread`: OpenMP over **SNPs within gene** (prep once; write serial)
-3. `--seed < 0` → `std::random_device` (not fixed seed 1)
-4. help/README: mode documents `gw`
-
-## Still open (v1.1)
-
-1. Real TBI/CSI region iterators (currently sequential load-all; fine for smoke, not for huge VCF memory)
-2. `--perm` cost (default 10000 full refits)
-3. miss-rate threshold; pheno per-sample NA
-4. chrom name normalize (`chr1` vs `1`)
-5. Numeric gold vs MatrixEQTL/GEMMA
-6. Vendored htslib default
-7. Gene-level OpenMP with thread-local buffers (current: SNP-parallel only)
-
-## Note on review item “for_each_snp_region unused”
-
-Still true as API stub; product path no longer calls it for cis (uses in-memory `all_snps`). Index-backed streaming remains v1.1 work.
+`AD-HOC VERIFY (review-continue): ALL PASS` — version, help, cis region path, max-miss, grm+lmm eig once, mode all load, gold_lm.

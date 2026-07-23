@@ -32,7 +32,7 @@ static Mode parse_mode(const std::string& s) {
   if (s == "trans") return Mode::Trans;
   if (s == "all") return Mode::All;
   if (s == "gw" || s == "gwas") return Mode::Gw;
-  die("invalid --mode: " + s + " (cis|trans|all)");
+  die("invalid --mode: " + s + " (cis|trans|all|gw)");
   return Mode::All;
 }
 
@@ -87,6 +87,7 @@ void print_help() {
     << "        --pval-cis FLOAT   cis output p threshold  [1e-5]\n"
     << "        --pval-trans FLOAT trans/gw output p threshold  [1e-5]\n"
     << "        --miss-hand STR    filter|impute missing GT  [filter]\n"
+    << "        --max-miss FLOAT   drop SNP if missing fraction > value  [0]\n"
     << "        --fast             share variance/dispersion params per gene\n"
     << "\n"
     << "Permutation options:\n"
@@ -127,6 +128,7 @@ int parse_options(int argc, char** argv, Options& opt) {
       {"pval-cis", required_argument, 0, 1004},
       {"pval-trans", required_argument, 0, 1005},
       {"miss-hand", required_argument, 0, 1006},
+      {"max-miss", required_argument, 0, 1012},
       {"fast", no_argument, 0, 1007},
       {"thread", required_argument, 0, 't'},
       {"threads", required_argument, 0, 't'},
@@ -167,6 +169,10 @@ int parse_options(int argc, char** argv, Options& opt) {
       case 1009: opt.seed = std::atoi(optarg); break;
       case 1010: opt.disable_beta_approx = true; break;
       case 1011: opt.version = true; break;
+      case 1012:
+        opt.max_miss = std::atof(optarg);
+        if (opt.max_miss < 0.0 || opt.max_miss > 1.0) die("--max-miss must be in [0,1]");
+        break;
       default:
         return 1;
     }

@@ -76,11 +76,10 @@ Grm slice_grm(const Grm& g, const std::vector<std::string>& sample_ids) {
 }
 
 Grm compute_grm(VcfSession& vcf, const std::vector<std::string>& sample_ids,
-                MissHand miss) {
+                const MissPolicy& miss) {
   vcf.set_sample_order(sample_ids);
   const int n = static_cast<int>(sample_ids.size());
   Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n, n);
-  Eigen::VectorXd ones = Eigen::VectorXd::Ones(n);
   int m = 0;
   vcf.for_each_snp(miss, [&](const SnpRec& s) {
     Eigen::Map<const Eigen::VectorXd> g(s.dosage.data(), n);

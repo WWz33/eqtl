@@ -38,6 +38,7 @@ eqtl [options]
 | `--pval-cis` | 1e-5 | cis 写出 p 阈值 |
 | `--pval-trans` | 1e-5 | trans/gw 写出 p 阈值 |
 | `--miss-hand` | filter | 缺失 GT：`filter` \| `impute` |
+| `--max-miss` | 0 | 缺失比例超过该值则丢 SNP |
 | `--fast` | 关 | 每基因共享方差/离散参数 |
 | `--perm` | 10000 | 基因级置换（`0`=关） |
 | `--seed` | — | 置换种子 |

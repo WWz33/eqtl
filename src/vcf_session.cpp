@@ -33,8 +33,13 @@ void VcfSession::open(const std::string& path) {
   for (int i = 0; i < hdr->n[BCF_DT_CTG]; ++i)
     contigs_.emplace_back(hdr->id[BCF_DT_CTG][i].key);
 
-  idx_ = bcf_index_load(path.c_str());
-  if (!idx_) tbx_ = tbx_index_load(path.c_str());
+  // Prefer CSI (bcf_index) then TBI (tbx)
+  hts_idx_t* csi = bcf_index_load(path.c_str());
+  if (csi) {
+    idx_ = csi;
+  } else {
+    tbx_ = tbx_index_load(path.c_str());
+  }
   indexed_ = (idx_ != nullptr) || (tbx_ != nullptr);
   if (!indexed_) ensure_index_warn();
   info("vcf: " + std::to_string(samples_.size()) + " samples, " +
@@ -59,9 +64,8 @@ void VcfSession::set_sample_order(const std::vector<std::string>& sample_ids) {
   }
 }
 
-bool VcfSession::parse_record(void* rec_v, MissHand miss, SnpRec& out) {
+bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) {
   auto* rec = static_cast<bcf1_t*>(rec_v);
-  // Must use the header that read this record (active_hdr_ or hdr_).
   auto* hdr = static_cast<bcf_hdr_t*>(active_hdr_ ? active_hdr_ : hdr_);
   if (bcf_unpack(rec, BCF_UN_STR | BCF_UN_FMT) < 0) return false;
   if (rec->n_allele != 2) return false;
@@ -112,12 +116,18 @@ bool VcfSession::parse_record(void* rec_v, MissHand miss, SnpRec& out) {
   }
   free(gt);
   if (n_ok == 0) return false;
-  if (miss == MissHand::Filter && n_miss > 0) return false;
-  if (miss == MissHand::Impute && n_miss > 0) {
+
+  const double miss_frac = static_cast<double>(n_miss) / static_cast<double>(n_an);
+  // max_miss=0 + filter → drop any missing (legacy). max_miss>0 → drop only if above threshold.
+  if (miss_frac > miss.max_miss + 1e-15) return false;
+  if (miss.hand == MissHand::Filter && miss.max_miss <= 0.0 && n_miss > 0) return false;
+  // remaining missing (allowed by max_miss): mean-impute so models see complete vectors
+  if (n_miss > 0) {
     const double mu = sum / n_ok;
     for (int i = 0; i < n_an; ++i)
       if (!std::isfinite(out.dosage[i])) out.dosage[i] = mu;
   }
+
   double mean = 0.0;
   for (double d : out.dosage) mean += d;
   mean /= n_an;
@@ -135,9 +145,7 @@ bool VcfSession::parse_record(void* rec_v, MissHand miss, SnpRec& out) {
   return true;
 }
 
-void VcfSession::for_each_snp(MissHand miss, const std::function<bool(const SnpRec&)>& fn) {
-  // Use original fp/hdr: seek to first record after header via reopen is safer;
-  // set active_hdr_ to the header used for bcf_read.
+void VcfSession::for_each_snp(const MissPolicy& miss, const std::function<bool(const SnpRec&)>& fn) {
   htsFile* rfp = hts_open(path_.c_str(), "r");
   if (!rfp) die("reopen VCF failed: " + path_);
   bcf_hdr_t* rh = bcf_hdr_read(rfp);
@@ -155,20 +163,101 @@ void VcfSession::for_each_snp(MissHand miss, const std::function<bool(const SnpR
 }
 
 void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, int64_t end,
-                                     MissHand miss, const std::function<bool(const SnpRec&)>& fn) {
-  for_each_snp(miss, [&](const SnpRec& s) {
-    if (s.chrom != chrom || s.pos < start || s.pos > end) return true;
-    return fn(s);
-  });
+                                     const MissPolicy& miss,
+                                     const std::function<bool(const SnpRec&)>& fn) {
+  if (start < 1) start = 1;
+  if (end < start) return;
+
+  if (!indexed_) {
+    ensure_index_warn();
+    for_each_snp(miss, [&](const SnpRec& s) {
+      if (!chrom_equal(s.chrom, chrom) || s.pos < start || s.pos > end) return true;
+      return fn(s);
+    });
+    return;
+  }
+
+  // Map user chrom to a contig name present in header (exact or chr-stripped)
+  std::string contig = chrom;
+  bool found = false;
+  for (const auto& c : contigs_) {
+    if (chrom_equal(c, chrom)) {
+      contig = c;
+      found = true;
+      break;
+    }
+  }
+  if (!found) return;
+
+  const std::string reg = contig + ":" + std::to_string(start) + "-" + std::to_string(end);
+  htsFile* rfp = hts_open(path_.c_str(), "r");
+  if (!rfp) die("reopen VCF failed: " + path_);
+  bcf_hdr_t* rh = bcf_hdr_read(rfp);
+  active_hdr_ = rh;
+
+  hts_itr_t* itr = nullptr;
+  bool use_bcf_itr = false;
+  if (idx_) {
+    itr = bcf_itr_querys(static_cast<hts_idx_t*>(idx_), rh, reg.c_str());
+    use_bcf_itr = (itr != nullptr);
+  }
+  if (!itr && tbx_) {
+    itr = tbx_itr_querys(static_cast<tbx_t*>(tbx_), reg.c_str());
+    use_bcf_itr = false;
+  }
+  if (!itr) {
+    active_hdr_ = nullptr;
+    bcf_hdr_destroy(rh);
+    hts_close(rfp);
+    // fallback sequential
+    for_each_snp(miss, [&](const SnpRec& s) {
+      if (!chrom_equal(s.chrom, chrom) || s.pos < start || s.pos > end) return true;
+      return fn(s);
+    });
+    return;
+  }
+
+  bcf1_t* rec = bcf_init();
+  SnpRec snp;
+  int ret = 0;
+  if (idx_ && use_bcf_itr) {
+    while ((ret = bcf_itr_next(rfp, itr, rec)) >= 0) {
+      if (!parse_record(rec, miss, snp)) continue;
+      if (!fn(snp)) break;
+    }
+  } else {
+    kstring_t sstr = {0, 0, nullptr};
+    while ((ret = tbx_itr_next(rfp, static_cast<tbx_t*>(tbx_), itr, &sstr)) >= 0) {
+      if (vcf_parse1(&sstr, rh, rec) < 0) continue;
+      if (!parse_record(rec, miss, snp)) continue;
+      if (!fn(snp)) break;
+    }
+    free(sstr.s);
+  }
+  bcf_destroy(rec);
+  hts_itr_destroy(itr);
+  active_hdr_ = nullptr;
+  bcf_hdr_destroy(rh);
+  hts_close(rfp);
 }
 
-std::vector<SnpRec> VcfSession::load_all(MissHand miss, int max_snps) {
+std::vector<SnpRec> VcfSession::load_all(const MissPolicy& miss, int max_snps) {
   std::vector<SnpRec> all;
   for_each_snp(miss, [&](const SnpRec& s) {
     all.push_back(s);
     return !(max_snps > 0 && static_cast<int>(all.size()) >= max_snps);
   });
   return all;
+}
+
+std::vector<SnpRec> VcfSession::load_region(const std::string& chrom, int64_t start, int64_t end,
+                                            const MissPolicy& miss) {
+  std::vector<SnpRec> out;
+  for_each_snp_region(chrom, start, end, miss, [&](const SnpRec& s) {
+    out.push_back(s);
+    return true;
+  });
+  return out;
 }
 
 }  // namespace eqtl
