@@ -46,12 +46,22 @@ void VcfSession::open(const std::string& path) {
   for (int i = 0; i < hdr->n[BCF_DT_CTG]; ++i)
     contigs_.emplace_back(hdr->id[BCF_DT_CTG][i].key);
 
-  // Prefer CSI (bcf_index) then TBI (tbx) — built by bcftools index
-  hts_idx_t* csi = bcf_index_load(path.c_str());
-  if (csi) {
-    idx_ = csi;
-  } else {
+  // Index: TBI for VCF.gz, CSI for BCF (bcftools index). Order reduces htslib noise.
+  const bool likely_vcf = path.size() >= 4 &&
+      (path.rfind(".vcf") != std::string::npos || path.rfind(".VCF") != std::string::npos);
+  if (likely_vcf) {
     tbx_ = tbx_index_load(path.c_str());
+    if (!tbx_) {
+      hts_idx_t* csi = bcf_index_load(path.c_str());
+      if (csi) idx_ = csi;
+    }
+  } else {
+    hts_idx_t* csi = bcf_index_load(path.c_str());
+    if (csi) {
+      idx_ = csi;
+    } else {
+      tbx_ = tbx_index_load(path.c_str());
+    }
   }
   indexed_ = (idx_ != nullptr) || (tbx_ != nullptr);
   if (!indexed_) ensure_index_warn();
