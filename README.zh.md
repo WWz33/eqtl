@@ -6,7 +6,7 @@
 
 <!-- README-I18N:END -->
 
-从 VCF 与 sample×gene 表型矩阵做 cis/trans eQTL。
+从 VCF/BCF 或 PLINK bed 与 sample×gene 表型矩阵做 cis/trans eQTL。
 
 ## Getting Started
 
@@ -14,20 +14,27 @@
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
-# 基因型索引（bcftools；CSI 或 TBI）
+# 用 --vcf 时建索引（bcftools）
 bcftools index -t data/smoke.vcf.gz
 
-# 用 GCTA 算 GRM（先从 smoke VCF 转 PLINK bed）
-plink --vcf data/smoke.vcf.gz --make-bed --out data/smoke
+# 可选：PLINK bed（与 GCTA 同一套）
+plink2 --vcf data/smoke.vcf.gz --make-bed --out data/smoke --allow-extra-chr
+
+# GCTA 算 GRM
 gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 
-# LMM eQTL（默认 --model lmm）
+# VCF 路径
 ./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
   -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute \
   -o data/out
+
+# 或 bfile + MAF
+./eqtl -b data/smoke -e data/smoke.pheno.tsv -g data/smoke.gff \
+  -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute --maf 0.05 \
+  -o data/out_bed
 ```
 
-大面板推荐 BCF + CSI：
+大面板 VCF 推荐 BCF + CSI：
 
 ```bash
 bcftools view -Ob -o panel.bcf panel.vcf.gz
@@ -42,7 +49,8 @@ eqtl [options]
 
 | 选项 | 默认 | 说明 |
 |------|------|------|
-| `-v, --vcf` | 必选 | VCF/BCF 基因型（GT） |
+| `-v, --vcf` | * | VCF/BCF 基因型（GT）；与 `--bfile` 二选一 |
+| `-b, --bfile` | * | PLINK 前缀 `.bed`/`.bim`/`.fam` |
 | `-e, --pheno` | 必选* | 表型矩阵（第1列 sample） |
 | `-g, --gff` | — | GFF3 gene 特征 |
 | `--gff-id-key` | — | GFF 基因 ID 属性名 |
@@ -56,6 +64,7 @@ eqtl [options]
 | `--pval-trans` | 1e-5 | trans/gw 写出 p 阈值 |
 | `--miss-hand` | filter | 缺失 GT：`filter` \| `impute` |
 | `--max-miss` | 0 | 缺失比例超过该值则丢 SNP |
+| `--maf` | 0 | 分析样本上最小 MAF（`0`=关） |
 | `--fast` | 关 | 每基因共享方差/离散参数 |
 | `--perm` | 10000 | 基因级置换（`0`=关） |
 | `--seed` | — | 置换种子 |
@@ -63,15 +72,18 @@ eqtl [options]
 | `-o, --out` | eqtl_out | 输出前缀 |
 | `-t, --thread` | 1 | 线程数 |
 
-\* 与 `--make-grm` 联用时可不给 pheno
+\* `--vcf` 与 `--bfile` 恰好一个；`--make-grm` 时可无 pheno
 
 ## 输入文件
 
-### 基因型（`-v/--vcf`）
+### 基因型（`-v/--vcf` 或 `-b/--bfile`）
 
-VCF/BCF。仅用 **GT**（0/1/2）。多等位位点不使用。
+二选一：
 
-索引用 **bcftools**（本程序不生成索引）：
+- **VCF/BCF**（`-v`）：仅用 **GT**（0/1/2）。多等位位点不使用。
+- **PLINK**（`-b PREFIX`）：`PREFIX.bed`/`.bim`/`.fam`（SNP-major）。dosage = **A1** 拷贝数（bim 第5列），与 GEMMA/quasar 一致。样本 ID = fam **IID**。
+
+VCF/BCF 索引用 **bcftools**（本程序不生成索引）：
 
 ```bash
 bcftools index -t panel.vcf.gz    # TBI
@@ -79,7 +91,9 @@ bcftools index -t panel.vcf.gz    # TBI
 bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf   # CSI
 ```
 
-无 CSI/TBI 时，cis 区域查询会扫全文件。
+无 CSI/TBI 时，cis 区域查询会扫全 VCF。
+
+`--maf`：在 **分析样本**（pheno∩geno、非缺失）上保留 `maf_min ≤ MAF ≤ 1−maf_min`（GCTA/GEMMA 风格）。默认 `0` = 不滤。
 
 | `--miss-hand` | `--max-miss` | 效果 |
 |---------------|--------------|------|

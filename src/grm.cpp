@@ -1,4 +1,5 @@
 #include "eqtl/grm.hpp"
+#include "eqtl/plink_bed.hpp"
 #include "eqtl/util.hpp"
 #include <fstream>
 #include <cstdio>
@@ -75,13 +76,14 @@ Grm slice_grm(const Grm& g, const std::vector<std::string>& sample_ids) {
   return o;
 }
 
-Grm compute_grm(VcfSession& vcf, const std::vector<std::string>& sample_ids,
-                const MissPolicy& miss) {
-  vcf.set_sample_order(sample_ids);
+namespace {
+
+template <typename ForEach>
+Grm compute_grm_from(ForEach&& for_each, const std::vector<std::string>& sample_ids) {
   const int n = static_cast<int>(sample_ids.size());
   Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n, n);
   int m = 0;
-  vcf.for_each_snp(miss, [&](const SnpRec& s) {
+  for_each([&](const SnpRec& s) {
     Eigen::Map<const Eigen::VectorXd> g(s.dosage.data(), n);
     double mu = g.mean();
     double p = mu / 2.0;
@@ -100,6 +102,24 @@ Grm compute_grm(VcfSession& vcf, const std::vector<std::string>& sample_ids,
   grm.K = std::move(A);
   info("computed GRM from " + std::to_string(m) + " SNPs");
   return grm;
+}
+
+}  // namespace
+
+Grm compute_grm(VcfSession& vcf, const std::vector<std::string>& sample_ids, const MissPolicy& miss,
+                double maf_min) {
+  vcf.set_sample_order(sample_ids);
+  return compute_grm_from(
+      [&](auto&& fn) { vcf.for_each_snp(miss, maf_min, std::forward<decltype(fn)>(fn)); },
+      sample_ids);
+}
+
+Grm compute_grm(PlinkBed& bed, const std::vector<std::string>& sample_ids, const MissPolicy& miss,
+                double maf_min) {
+  bed.set_sample_order(sample_ids);
+  return compute_grm_from(
+      [&](auto&& fn) { bed.for_each_snp(miss, maf_min, std::forward<decltype(fn)>(fn)); },
+      sample_ids);
 }
 
 } // namespace eqtl

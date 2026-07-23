@@ -43,6 +43,7 @@ SRC := \
   src/pheno.cpp \
   src/annot.cpp \
   src/vcf_session.cpp \
+  src/plink_bed.cpp \
   src/grm.cpp \
   src/model_lm.cpp \
   src/model_lmm.cpp \

@@ -10,7 +10,9 @@ enum class Model { Lm, Glm, Lmm, Glmm };
 enum class MissHand { Filter, Impute };
 
 struct Options {
+  // Genotypes: exactly one of vcf or bfile (PLINK prefix → .bed/.bim/.fam)
   std::string vcf;
+  std::string bfile;
   std::string pheno;
   std::string out = "eqtl_out";
   std::string gff;
@@ -30,6 +32,9 @@ struct Options {
   // drop SNP if missing fraction among analysis samples > max_miss
   // filter default 0 => any missing drops; impute still respects max_miss before fill
   double max_miss = 0.0;
+  // keep if maf_min <= MAF <= 1-maf_min on analysis samples (non-missing); 0 = off
+  // (GCTA/GEMMA-style)
+  double maf = 0.0;
   bool fast = false;
   int threads = 1;
 
@@ -39,6 +44,8 @@ struct Options {
 
   bool help = false;
   bool version = false;
+
+  bool use_bfile() const { return !bfile.empty(); }
 };
 
 // returns 0 ok, 1 error (message on stderr)

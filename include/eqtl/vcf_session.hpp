@@ -40,13 +40,16 @@ public:
 
   void set_sample_order(const std::vector<std::string>& sample_ids);
 
-  void for_each_snp(const MissPolicy& miss, const std::function<bool(const SnpRec&)>& fn);
+  // maf_min: GCTA/GEMMA-style keep if maf_min <= MAF <= 1-maf_min; 0 = off
+  void for_each_snp(const MissPolicy& miss, double maf_min,
+                    const std::function<bool(const SnpRec&)>& fn);
   // 1-based inclusive region; uses CSI/TBI when present
   void for_each_snp_region(const std::string& chrom, int64_t start, int64_t end,
-                           const MissPolicy& miss, const std::function<bool(const SnpRec&)>& fn);
-  std::vector<SnpRec> load_all(const MissPolicy& miss, int max_snps = -1);
+                           const MissPolicy& miss, double maf_min,
+                           const std::function<bool(const SnpRec&)>& fn);
+  std::vector<SnpRec> load_all(const MissPolicy& miss, double maf_min, int max_snps = -1);
   std::vector<SnpRec> load_region(const std::string& chrom, int64_t start, int64_t end,
-                                  const MissPolicy& miss);
+                                  const MissPolicy& miss, double maf_min);
 
 private:
   std::string path_;

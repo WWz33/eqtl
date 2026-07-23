@@ -6,7 +6,7 @@
 
 <!-- README-I18N:END -->
 
-cis/trans eQTL from VCF and a sample×gene phenotype matrix.
+cis/trans eQTL from VCF/BCF or PLINK bed and a sample×gene phenotype matrix.
 
 ## Getting Started
 
@@ -14,20 +14,27 @@ cis/trans eQTL from VCF and a sample×gene phenotype matrix.
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
-# index genotypes (bcftools; CSI or TBI)
+# index genotypes (bcftools; CSI or TBI) when using --vcf
 bcftools index -t data/smoke.vcf.gz
 
-# GRM via GCTA (PLINK bed from smoke VCF)
-plink --vcf data/smoke.vcf.gz --make-bed --out data/smoke
+# optional: PLINK bed (same panel as GCTA)
+plink2 --vcf data/smoke.vcf.gz --make-bed --out data/smoke --allow-extra-chr
+
+# GRM via GCTA
 gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 
-# LMM eQTL (default --model lmm)
+# LMM eQTL from VCF
 ./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
   -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute \
   -o data/out
+
+# or from PLINK bfile (GCTA/GEMMA-style), with MAF filter
+./eqtl -b data/smoke -e data/smoke.pheno.tsv -g data/smoke.gff \
+  -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute --maf 0.05 \
+  -o data/out_bed
 ```
 
-BCF + CSI is preferred for large panels:
+BCF + CSI is preferred for large VCF panels:
 
 ```bash
 bcftools view -Ob -o panel.bcf panel.vcf.gz
@@ -42,7 +49,8 @@ eqtl [options]
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `-v, --vcf` | required | VCF/BCF genotypes (GT) |
+| `-v, --vcf` | * | VCF/BCF genotypes (GT); exclusive with `--bfile` |
+| `-b, --bfile` | * | PLINK prefix `.bed`/`.bim`/`.fam` |
 | `-e, --pheno` | required* | phenotype matrix (col1=sample) |
 | `-g, --gff` | — | GFF3 gene features |
 | `--gff-id-key` | — | GFF attribute for gene id |
@@ -56,6 +64,7 @@ eqtl [options]
 | `--pval-trans` | 1e-5 | trans/gw output p threshold |
 | `--miss-hand` | filter | `filter` \| `impute` missing GT |
 | `--max-miss` | 0 | drop SNP if missing fraction > value |
+| `--maf` | 0 | min MAF on analysis samples (`0`=off) |
 | `--fast` | off | share variance/dispersion params per gene |
 | `--perm` | 10000 | gene-level permutations (`0`=off) |
 | `--seed` | — | permutation seed |
@@ -63,15 +72,18 @@ eqtl [options]
 | `-o, --out` | eqtl_out | output prefix |
 | `-t, --thread` | 1 | threads |
 
-\* not required with `--make-grm`
+\* need exactly one of `--vcf` or `--bfile`; pheno not required with `--make-grm`
 
 ## Input files
 
-### Genotypes (`-v/--vcf`)
+### Genotypes (`-v/--vcf` or `-b/--bfile`)
 
-VCF/BCF. Field **GT** only (0/1/2). Multiallelic sites not used.
+Exactly one of:
 
-Index with **bcftools** (not built into `eqtl`):
+- **VCF/BCF** (`-v`): field **GT** only (0/1/2). Multiallelic sites not used.
+- **PLINK** (`-b PREFIX`): `PREFIX.bed` + `.bim` + `.fam` (SNP-major). Dosage = count of **A1** (bim col5), same encoding as GEMMA/quasar. Sample IDs = fam **IID**.
+
+Index VCF/BCF with **bcftools** (not built into `eqtl`):
 
 ```bash
 bcftools index -t panel.vcf.gz    # TBI
@@ -79,7 +91,9 @@ bcftools index -t panel.vcf.gz    # TBI
 bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf   # CSI
 ```
 
-Without CSI/TBI, region (cis) queries scan the whole file.
+Without CSI/TBI, region (cis) queries scan the whole VCF.
+
+`--maf`: keep SNPs with `maf_min ≤ MAF ≤ 1−maf_min` among **analysis samples** (pheno∩geno, non-missing), GCTA/GEMMA-style. Default `0` = off.
 
 | `--miss-hand` | `--max-miss` | Effect |
 |---------------|--------------|--------|

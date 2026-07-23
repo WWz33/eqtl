@@ -73,6 +73,7 @@ void print_help() {
     << "\n"
     << "Input options:\n"
     << "    -v, --vcf FILE         genotypes VCF/BCF (GT)\n"
+    << "    -b, --bfile PREFIX     PLINK bed/bim/fam prefix (GCTA/GEMMA-style)\n"
     << "    -e, --pheno FILE       phenotype matrix (col1=sample)\n"
     << "    -g, --gff FILE         GFF3 gene annotation (TSS)\n"
     << "    -c, --covar FILE       covariates\n"
@@ -88,6 +89,7 @@ void print_help() {
     << "        --pval-trans FLOAT trans/gw output p threshold  [1e-5]\n"
     << "        --miss-hand STR    filter|impute missing GT  [filter]\n"
     << "        --max-miss FLOAT   drop SNP if missing fraction > value  [0]\n"
+    << "        --maf FLOAT        min MAF on analysis samples  [0=off]\n"
     << "        --fast             share variance/dispersion params per gene\n"
     << "\n"
     << "Permutation options:\n"
@@ -103,8 +105,9 @@ void print_help() {
     << "\n"
     << "Examples:\n"
     << "    eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff --model lm --mode cis --perm 0 -o out\n"
+    << "    eqtl -b data/smoke -e data/smoke.pheno.tsv -g data/smoke.gff --model lm --mode cis --perm 0 --maf 0.05 -o out\n"
     << "    eqtl -v data/smoke.vcf.gz --make-grm -o data/smoke\n"
-    << "    eqtl -v in.vcf.gz -e pheno.tsv -g genes.gff --model lmm,glm --fast -o run1\n";
+    << "    eqtl -b data/smoke --make-grm -o data/smoke_from_bed\n";
 }
 
 int parse_options(int argc, char** argv, Options& opt) {
@@ -115,6 +118,7 @@ int parse_options(int argc, char** argv, Options& opt) {
 
   static struct option long_opts[] = {
       {"vcf", required_argument, 0, 'v'},
+      {"bfile", required_argument, 0, 'b'},
       {"pheno", required_argument, 0, 'e'},
       {"out", required_argument, 0, 'o'},
       {"gff", required_argument, 0, 'g'},
@@ -129,6 +133,7 @@ int parse_options(int argc, char** argv, Options& opt) {
       {"pval-trans", required_argument, 0, 1005},
       {"miss-hand", required_argument, 0, 1006},
       {"max-miss", required_argument, 0, 1012},
+      {"maf", required_argument, 0, 1013},
       {"fast", no_argument, 0, 1007},
       {"thread", required_argument, 0, 't'},
       {"threads", required_argument, 0, 't'},
@@ -142,9 +147,10 @@ int parse_options(int argc, char** argv, Options& opt) {
 
   int c;
   int idx;
-  while ((c = getopt_long(argc, argv, "v:e:o:g:c:k:m:w:t:h", long_opts, &idx)) != -1) {
+  while ((c = getopt_long(argc, argv, "v:b:e:o:g:c:k:m:w:t:h", long_opts, &idx)) != -1) {
     switch (c) {
       case 'v': opt.vcf = optarg; break;
+      case 'b': opt.bfile = optarg; break;
       case 'e': opt.pheno = optarg; break;
       case 'o': opt.out = optarg; break;
       case 'g': opt.gff = optarg; break;
@@ -173,6 +179,10 @@ int parse_options(int argc, char** argv, Options& opt) {
         opt.max_miss = std::atof(optarg);
         if (opt.max_miss < 0.0 || opt.max_miss > 1.0) die("--max-miss must be in [0,1]");
         break;
+      case 1013:
+        opt.maf = std::atof(optarg);
+        if (opt.maf < 0.0 || opt.maf > 0.5) die("--maf must be in [0,0.5]");
+        break;
       default:
         return 1;
     }
@@ -187,8 +197,13 @@ int parse_options(int argc, char** argv, Options& opt) {
     return 2;
   }
 
-  if (opt.vcf.empty()) {
-    std::cerr << "[E] missing -v/--vcf\n";
+  if (opt.vcf.empty() == opt.bfile.empty()) {
+    // both empty or both set
+    if (opt.vcf.empty() && opt.bfile.empty()) {
+      std::cerr << "[E] need exactly one of -v/--vcf or -b/--bfile\n";
+    } else {
+      std::cerr << "[E] use only one of -v/--vcf or -b/--bfile\n";
+    }
     return 1;
   }
   if (!opt.make_grm && opt.pheno.empty()) {

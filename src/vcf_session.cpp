@@ -166,12 +166,11 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
       if (!std::isfinite(out.dosage[i])) out.dosage[i] = mu;
   }
 
-  double mean = 0.0;
-  for (double d : out.dosage) mean += d;
-  mean /= n_an;
-  out.maf = mean / 2.0;
-  if (out.maf > 0.5) out.maf = 1.0 - out.maf;
-  if (out.maf < 1e-12) return false;
+  // MAF on non-missing (GEMMA/GCTA style); gate applied by caller via maf_min
+  double maf = (sum / static_cast<double>(n_ok)) / 2.0;
+  if (maf > 0.5) maf = 1.0 - maf;
+  if (maf < 1e-12) return false;
+  out.maf = maf;
   out.chrom = bcf_hdr_id2name(hdr, rec->rid);
   out.pos = rec->pos + 1;
   out.ref = rec->d.allele[0] ? rec->d.allele[0] : ".";
@@ -183,7 +182,13 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   return true;
 }
 
-void VcfSession::for_each_snp(const MissPolicy& miss, const std::function<bool(const SnpRec&)>& fn) {
+static bool pass_maf_vcf(double maf, double maf_min) {
+  if (maf_min <= 0.0) return true;
+  return !(maf < maf_min || maf > (1.0 - maf_min));
+}
+
+void VcfSession::for_each_snp(const MissPolicy& miss, double maf_min,
+                              const std::function<bool(const SnpRec&)>& fn) {
   if (!fp_ || !hdr_ || !rec_) die("VCF not open");
   if (!rewind_to_data()) die("cannot rewind VCF for full scan: " + path_);
   auto* rfp = static_cast<htsFile*>(fp_);
@@ -192,12 +197,13 @@ void VcfSession::for_each_snp(const MissPolicy& miss, const std::function<bool(c
   SnpRec snp;
   while (bcf_read(rfp, rh, rec) == 0) {
     if (!parse_record(rec, miss, snp)) continue;
+    if (!pass_maf_vcf(snp.maf, maf_min)) continue;
     if (!fn(snp)) break;
   }
 }
 
 void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, int64_t end,
-                                     const MissPolicy& miss,
+                                     const MissPolicy& miss, double maf_min,
                                      const std::function<bool(const SnpRec&)>& fn) {
   if (start < 1) start = 1;
   if (end < start) return;
@@ -205,7 +211,7 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
 
   if (!indexed_) {
     ensure_index_warn();
-    for_each_snp(miss, [&](const SnpRec& s) {
+    for_each_snp(miss, maf_min, [&](const SnpRec& s) {
       if (!chrom_equal(s.chrom, chrom) || s.pos < start || s.pos > end) return true;
       return fn(s);
     });
@@ -231,8 +237,7 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
     use_bcf_itr = false;
   }
   if (!itr) {
-    // fallback sequential (same filters)
-    for_each_snp(miss, [&](const SnpRec& s) {
+    for_each_snp(miss, maf_min, [&](const SnpRec& s) {
       if (!chrom_equal(s.chrom, chrom) || s.pos < start || s.pos > end) return true;
       return fn(s);
     });
@@ -244,6 +249,7 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
   if (idx_ && use_bcf_itr) {
     while ((ret = bcf_itr_next(rfp, itr, rec)) >= 0) {
       if (!parse_record(rec, miss, snp)) continue;
+      if (!pass_maf_vcf(snp.maf, maf_min)) continue;
       if (!fn(snp)) break;
     }
   } else {
@@ -251,6 +257,7 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
     while ((ret = tbx_itr_next(rfp, static_cast<tbx_t*>(tbx_), itr, &sstr)) >= 0) {
       if (vcf_parse1(&sstr, rh, rec) < 0) continue;
       if (!parse_record(rec, miss, snp)) continue;
+      if (!pass_maf_vcf(snp.maf, maf_min)) continue;
       if (!fn(snp)) break;
     }
     free(sstr.s);
@@ -258,10 +265,10 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
   hts_itr_destroy(itr);
 }
 
-std::vector<SnpRec> VcfSession::load_all(const MissPolicy& miss, int max_snps) {
+std::vector<SnpRec> VcfSession::load_all(const MissPolicy& miss, double maf_min, int max_snps) {
   std::vector<SnpRec> all;
   if (max_snps > 0) all.reserve(static_cast<size_t>(max_snps));
-  for_each_snp(miss, [&](const SnpRec& s) {
+  for_each_snp(miss, maf_min, [&](const SnpRec& s) {
     all.push_back(s);
     return !(max_snps > 0 && static_cast<int>(all.size()) >= max_snps);
   });
@@ -269,11 +276,10 @@ std::vector<SnpRec> VcfSession::load_all(const MissPolicy& miss, int max_snps) {
 }
 
 std::vector<SnpRec> VcfSession::load_region(const std::string& chrom, int64_t start, int64_t end,
-                                            const MissPolicy& miss) {
+                                            const MissPolicy& miss, double maf_min) {
   std::vector<SnpRec> out;
-  // typical cis window: a few thousand SNPs
   out.reserve(4096);
-  for_each_snp_region(chrom, start, end, miss, [&](const SnpRec& s) {
+  for_each_snp_region(chrom, start, end, miss, maf_min, [&](const SnpRec& s) {
     out.push_back(s);
     return true;
   });

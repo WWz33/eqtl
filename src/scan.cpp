@@ -2,6 +2,7 @@
 #include "eqtl/output.hpp"
 #include "eqtl/stats_extra.hpp"
 #include "eqtl/util.hpp"
+#include "eqtl/plink_bed.hpp"
 #include <fstream>
 #include <random>
 #include <omp.h>
@@ -196,37 +197,40 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
 }  // namespace
 
 int run_make_grm(const Options& opt) {
-  VcfSession vcf;
-  vcf.open(opt.vcf);
-  std::vector<std::string> samples = vcf.samples();
-  if (!opt.pheno.empty()) {
-    PhenoData ph = load_pheno(opt.pheno);
-    samples = intersect_order(ph.sample_ids, vcf.samples());
-    if (samples.empty()) {
-      die("no overlapping samples for GRM");
-    }
-  }
   MissPolicy mp{opt.miss, opt.max_miss};
-  Grm g = compute_grm(vcf, samples, mp);
-  write_grm_gcta(opt.out, g);
+  const double maf = opt.maf;
+  if (opt.use_bfile()) {
+    PlinkBed bed;
+    bed.open(opt.bfile);
+    std::vector<std::string> samples = bed.samples();
+    if (!opt.pheno.empty()) {
+      PhenoData ph = load_pheno(opt.pheno);
+      samples = intersect_order(ph.sample_ids, bed.samples());
+      if (samples.empty()) die("no overlapping samples for GRM");
+    }
+    Grm g = compute_grm(bed, samples, mp, maf);
+    write_grm_gcta(opt.out, g);
+  } else {
+    VcfSession vcf;
+    vcf.open(opt.vcf);
+    std::vector<std::string> samples = vcf.samples();
+    if (!opt.pheno.empty()) {
+      PhenoData ph = load_pheno(opt.pheno);
+      samples = intersect_order(ph.sample_ids, vcf.samples());
+      if (samples.empty()) die("no overlapping samples for GRM");
+    }
+    Grm g = compute_grm(vcf, samples, mp, maf);
+    write_grm_gcta(opt.out, g);
+  }
   return 0;
 }
 
-int run_eqtl(const Options& opt) {
-  omp_set_num_threads(opt.threads);
-
-  PhenoData ph = load_pheno(opt.pheno);
-  VcfSession vcf;
-  vcf.open(opt.vcf);
-
-  std::vector<std::string> sample_order = intersect_order(ph.sample_ids, vcf.samples());
-  if (sample_order.empty()) {
-    die("no overlapping samples between pheno and VCF");
-  }
-  info("overlap samples: " + std::to_string(sample_order.size()));
-  slice_pheno(ph, sample_order);
+// Genotype source: VCF or PLINK bfile (same scan loop)
+template <typename G>
+int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
+                  const std::vector<std::string>& sample_order) {
   CovData cov = load_covar(opt.covar, sample_order);
-  vcf.set_sample_order(sample_order);
+  geno.set_sample_order(sample_order);
 
   std::unordered_map<std::string, GeneLoc> annot;
   const bool have_gff = !opt.gff.empty();
@@ -236,7 +240,6 @@ int run_eqtl(const Options& opt) {
     info("no GFF: mode ignored; genome-wide all-pairs (gw)");
   }
 
-  // determine effective modes
   std::vector<std::string> scopes;
   if (!have_gff) {
     scopes = {"gw"};
@@ -252,30 +255,27 @@ int run_eqtl(const Options& opt) {
 
   bool any_grm = false;
   for (Model m : opt.models) {
-    if (needs_grm(m)) {
-      any_grm = true;
-    }
+    if (needs_grm(m)) any_grm = true;
   }
   Grm grm;
   Eigen::MatrixXd* Kptr = nullptr;
   Eigen::MatrixXd Kmat;
   LmmBasis lmm_basis;
   const LmmBasis* lmm_basis_ptr = nullptr;
+  MissPolicy mp{opt.miss, opt.max_miss};
+  const double maf = opt.maf;
   if (any_grm) {
     if (!opt.grm.empty()) {
       grm = slice_grm(load_grm_gcta(opt.grm), sample_order);
     } else {
-      info("computing GRM from VCF (overlap samples)");
-      MissPolicy mp{opt.miss, opt.max_miss};
-      grm = compute_grm(vcf, sample_order, mp);
+      info("computing GRM from genotypes (overlap samples)");
+      grm = compute_grm(geno, sample_order, mp, maf);
     }
     Kmat = grm.K;
     Kptr = &Kmat;
     bool need_lmm = false;
     for (Model m : opt.models) {
-      if (m == Model::Lmm) {
-        need_lmm = true;
-      }
+      if (m == Model::Lmm) need_lmm = true;
     }
     if (need_lmm) {
       info("eigendecompose GRM once");
@@ -284,27 +284,23 @@ int run_eqtl(const Options& opt) {
     }
   }
 
-  MissPolicy mp{opt.miss, opt.max_miss};
   const bool need_all_snps =
       std::find(scopes.begin(), scopes.end(), "trans") != scopes.end() ||
       std::find(scopes.begin(), scopes.end(), "gw") != scopes.end();
   std::vector<SnpRec> all_snps;
   if (need_all_snps) {
     info("loading SNPs (stream)");
-    all_snps = vcf.load_all(mp, -1);
+    all_snps = geno.load_all(mp, maf, -1);
     info("SNPs loaded: " + std::to_string(all_snps.size()));
   } else {
-    info("cis-only: shared VCF session + region queries (index via bcftools)");
+    info("cis-only: region queries");
   }
 
-  // Reuse cis region buffer across genes (avoids per-gene allocator churn)
   std::vector<SnpRec> cis_buf;
   cis_buf.reserve(8192);
 
   for (Model model : opt.models) {
-    if (needs_grm(model) && !Kptr) {
-      die("internal: GRM required");
-    }
+    if (needs_grm(model) && !Kptr) die("internal: GRM required");
     for (const std::string& scope : scopes) {
       const std::string prefix = opt.out + "." + model_str(model) + "." + scope;
       ScopeOut so;
@@ -312,10 +308,7 @@ int run_eqtl(const Options& opt) {
       so.pairs.open(prefix + ".pairs.tsv");
       so.top.open(prefix + ".top.tsv");
       so.region.open(prefix + ".region.tsv");
-      if (!so.pairs || !so.top || !so.region) {
-        die("cannot open output for " + prefix);
-      }
-      // larger stream buffers for pair-heavy runs
+      if (!so.pairs || !so.top || !so.region) die("cannot open output for " + prefix);
       static char pairs_buf[1 << 20];
       static char top_buf[1 << 16];
       static char region_buf[1 << 16];
@@ -332,13 +325,8 @@ int run_eqtl(const Options& opt) {
         const std::string& gene = ph.gene_ids[gi];
         Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
 
-        // skip genes with NA / zero variance
-        if (!y.allFinite()) {
-          continue;
-        }
-        if (y.array().abs().maxCoeff() < 1e-15) {
-          continue;
-        }
+        if (!y.allFinite()) continue;
+        if (y.array().abs().maxCoeff() < 1e-15) continue;
         if (needs_counts(model) && !looks_like_counts(y)) {
           warn("skip non-count gene for " + model_str(model) + ": " + gene);
           continue;
@@ -348,9 +336,7 @@ int run_eqtl(const Options& opt) {
         GeneLoc loc_store;
         if (have_gff) {
           auto it = annot.find(gene);
-          if (it == annot.end()) {
-            continue;  // 0 hit skip
-          }
+          if (it == annot.end()) continue;
           loc_store = it->second;
           locp = &loc_store;
         }
@@ -358,9 +344,7 @@ int run_eqtl(const Options& opt) {
         std::vector<SnpRec>* snps_ptr = nullptr;
         std::vector<SnpRec> snps_owned;
         if (scope == "cis") {
-          if (!locp) {
-            continue;
-          }
+          if (!locp) continue;
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
           cis_buf.clear();
@@ -371,33 +355,27 @@ int run_eqtl(const Options& opt) {
               }
             }
           } else {
-            vcf.for_each_snp_region(locp->chrom, cstart, cend, mp, [&](const SnpRec& s) {
+            geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
               cis_buf.push_back(s);
               return true;
             });
           }
           snps_ptr = &cis_buf;
         } else if (scope == "trans") {
-          if (!locp) {
-            continue;
-          }
+          if (!locp) continue;
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
           snps_owned.reserve(all_snps.size());
           for (const auto& s : all_snps) {
-            if (chrom_equal(s.chrom, locp->chrom) && s.pos >= cstart && s.pos <= cend) {
-              continue;
-            }
+            if (chrom_equal(s.chrom, locp->chrom) && s.pos >= cstart && s.pos <= cend) continue;
             snps_owned.push_back(s);
           }
           snps_ptr = &snps_owned;
-        } else {  // gw
+        } else {
           snps_ptr = &all_snps;
         }
 
-        if (!snps_ptr || snps_ptr->empty()) {
-          continue;
-        }
+        if (!snps_ptr || snps_ptr->empty()) continue;
 
         GeneSummary summary;
         scan_gene_snps(opt, model, scope, gene, y, cov.X, Kptr, lmm_basis_ptr, locp, *snps_ptr, pthr,
@@ -407,6 +385,29 @@ int run_eqtl(const Options& opt) {
     }
   }
   return 0;
+}
+
+int run_eqtl(const Options& opt) {
+  omp_set_num_threads(opt.threads);
+
+  PhenoData ph = load_pheno(opt.pheno);
+  if (opt.use_bfile()) {
+    PlinkBed bed;
+    bed.open(opt.bfile);
+    std::vector<std::string> sample_order = intersect_order(ph.sample_ids, bed.samples());
+    if (sample_order.empty()) die("no overlapping samples between pheno and fam");
+    info("overlap samples: " + std::to_string(sample_order.size()));
+    slice_pheno(ph, sample_order);
+    return run_eqtl_geno(opt, bed, ph, sample_order);
+  }
+
+  VcfSession vcf;
+  vcf.open(opt.vcf);
+  std::vector<std::string> sample_order = intersect_order(ph.sample_ids, vcf.samples());
+  if (sample_order.empty()) die("no overlapping samples between pheno and VCF");
+  info("overlap samples: " + std::to_string(sample_order.size()));
+  slice_pheno(ph, sample_order);
+  return run_eqtl_geno(opt, vcf, ph, sample_order);
 }
 
 }  // namespace eqtl
