@@ -14,27 +14,17 @@ cis/trans eQTL from VCF/BCF or PLINK bed and a sample×gene phenotype matrix.
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
-# index genotypes (bcftools; CSI or TBI) when using --vcf
 bcftools index -t data/smoke.vcf.gz
-
-# optional: PLINK bed (same panel as GCTA)
 plink2 --vcf data/smoke.vcf.gz --make-bed --out data/smoke --allow-extra-chr
-
-# GRM via GCTA
 gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 
-# LMM eQTL from VCF
 ./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute \
-  -o data/out
+  -k data/smoke_grm --model lmm --mode cis --miss-hand impute -o data/out
 
-# or from PLINK bfile (GCTA/GEMMA-style), with MAF filter
 ./eqtl -b data/smoke -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute --maf 0.05 \
+  -k data/smoke_grm --model lmm --mode cis --miss-hand impute --maf 0.05 \
   -o data/out_bed
 ```
-
-BCF + CSI is preferred for large VCF panels:
 
 ```bash
 bcftools view -Ob -o panel.bcf panel.vcf.gz
@@ -49,9 +39,9 @@ eqtl [options]
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `-v, --vcf` | * | VCF/BCF genotypes (GT); exclusive with `--bfile` |
+| `-v, --vcf` | * | VCF/BCF (GT); exclusive with `--bfile` |
 | `-b, --bfile` | * | PLINK bfile prefix |
-| `-e, --pheno` | required* | phenotype matrix (col1=sample) |
+| `-e, --pheno` | required* | phenotype matrix (col1=`sample`) |
 | `-g, --gff` | — | GFF3 gene features |
 | `--gff-id-key` | — | GFF attribute for gene id |
 | `-c, --covar` | — | covariates |
@@ -62,7 +52,7 @@ eqtl [options]
 | `-w, --window` | 1000000 | cis window around TSS (bp) |
 | `--pval-cis` | 1e-5 | cis output p threshold |
 | `--pval-trans` | 1e-5 | trans/gw output p threshold |
-| `--miss-hand` | filter | `filter` \| `impute` missing GT |
+| `--miss-hand` | filter | `filter` \| `impute` |
 | `--max-miss` | 0 | drop SNP if missing fraction > value |
 | `--maf` | 0 | min MAF (`0`=off) |
 | `--fast` | off | LMM: sparse GRM approx; glm/glmm: fix null phi/sigma2 |
@@ -72,15 +62,16 @@ eqtl [options]
 | `-o, --out` | eqtl_out | output prefix |
 | `-t, --thread` | 1 | threads |
 
-\* need exactly one of `--vcf` or `--bfile`; pheno not required with `--make-grm`
+\* exactly one of `--vcf` or `--bfile`; pheno not required with `--make-grm`
 
 ## Input files
 
 ### Genotypes (`-v/--vcf` or `-b/--bfile`)
 
-Exactly one of `--vcf` (VCF/BCF, GT) or `--bfile` (PLINK `.bed`/`.bim`/`.fam` prefix).
-
-Index VCF/BCF with **bcftools**:
+| Input | Files |
+|-------|--------|
+| `--vcf` | VCF/BCF, field **GT** |
+| `--bfile` | PLINK `.bed`/`.bim`/`.fam` |
 
 ```bash
 bcftools index -t panel.vcf.gz
@@ -96,8 +87,6 @@ bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf
 
 ### Phenotype (`-e/--pheno`)
 
-TSV, row = sample, columns = genes.
-
 ```text
 sample	geneA	geneB
 S1	1.2	3.4
@@ -107,11 +96,11 @@ S2	0.5	2.1
 | Rule | |
 |------|--|
 | Header | required |
-| Col1 | sample ID |
+| Col1 | `sample` |
 | Other headers | gene IDs |
-| `lm` / `lmm` | continuous values |
+| `lm` / `lmm` | continuous |
 | `glm` / `glmm` | non-negative counts |
-| Missing | `NA` / `NaN` / `.` → drop that sample for the gene (GCTA-style) |
+| Missing | `NA` / `NaN` / `.` → drop that sample for the gene |
 
 ### Covariates (`-c/--covar`)
 
@@ -121,16 +110,16 @@ S1	0	1.2
 S2	1	0.3
 ```
 
-Col1 = sample ID; remaining columns = covariates.
+Col1 = `sample`; other columns = covariates.
 
 ### Annotation (`-g/--gff`)
 
-GFF3 `gene` lines. Gene id from `ID`, else `Name` / `gene_id` (override with `--gff-id-key`).
+GFF3 `gene` lines. Gene id: `ID`, else `Name` / `gene_id` (`--gff-id-key`).
 
 | Item | Definition |
 |------|------------|
 | TSS | `+` → start; `−` → end (GFF 1-based) |
-| cis interval | `[TSS−W, TSS+W]` (`-w`, bp) |
+| cis | `[TSS−W, TSS+W]` (`-w`, bp) |
 
 ### Relatedness (`-k/--grm`)
 
@@ -139,11 +128,9 @@ GFF3 `gene` lines. Gene id from `ID`, else `Name` / `gene_id` (override with `--
 | `{prefix}.grm.id` | one sample per line; `FID IID` → IID, or single ID |
 | `{prefix}.grm.bin` | float32 lower triangle incl. diagonal; order = `.id` |
 
-`--make-grm` writes the two files and exits.
+`--make-grm` writes both files and exits.
 
 ## Output files
-
-Prefix `-o PREFIX`. Uncompressed TSV per model and scope:
 
 ```text
 {PREFIX}.{model}.{scope}.pairs.tsv
@@ -162,7 +149,7 @@ Rows with `p ≤ --pval-cis` (cis) or `p ≤ --pval-trans` (trans/gw).
 | `gene` | gene ID |
 | `snp` | variant ID or `chrom:pos:ref:alt` |
 | `chrom` | contig |
-| `pos` | 1-based position |
+| `pos` | 1-based |
 | `ref` / `alt` | alleles; beta on alt dosage |
 | `maf` | MAF |
 | `beta` / `se` / `stat` / `p` | association |
@@ -175,7 +162,7 @@ Rows with `p ≤ --pval-cis` (cis) or `p ≤ --pval-trans` (trans/gw).
 
 ### `{scope}.top.tsv`
 
-Same columns as pairs. At most one row per gene (lowest p among rows that pass the p threshold).
+Same columns as pairs. ≤1 row per gene (lowest p among threshold-passing SNPs).
 
 ### `{scope}.region.tsv`
 

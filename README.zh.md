@@ -14,27 +14,17 @@
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
-# 用 --vcf 时建索引（bcftools）
 bcftools index -t data/smoke.vcf.gz
-
-# 可选：PLINK bed（与 GCTA 同一套）
 plink2 --vcf data/smoke.vcf.gz --make-bed --out data/smoke --allow-extra-chr
-
-# GCTA 算 GRM
 gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 
-# VCF 路径
 ./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute \
-  -o data/out
+  -k data/smoke_grm --model lmm --mode cis --miss-hand impute -o data/out
 
-# 或 bfile + MAF
 ./eqtl -b data/smoke -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute --maf 0.05 \
+  -k data/smoke_grm --model lmm --mode cis --miss-hand impute --maf 0.05 \
   -o data/out_bed
 ```
-
-大面板 VCF 推荐 BCF + CSI：
 
 ```bash
 bcftools view -Ob -o panel.bcf panel.vcf.gz
@@ -49,9 +39,9 @@ eqtl [options]
 
 | 选项 | 默认 | 说明 |
 |------|------|------|
-| `-v, --vcf` | * | VCF/BCF 基因型（GT）；与 `--bfile` 二选一 |
+| `-v, --vcf` | * | VCF/BCF（GT）；与 `--bfile` 二选一 |
 | `-b, --bfile` | * | PLINK bfile 前缀 |
-| `-e, --pheno` | 必选* | 表型矩阵（第1列 sample） |
+| `-e, --pheno` | 必选* | 表型矩阵（第1列 `sample`） |
 | `-g, --gff` | — | GFF3 gene 特征 |
 | `--gff-id-key` | — | GFF 基因 ID 属性名 |
 | `-c, --covar` | — | 协变量 |
@@ -62,7 +52,7 @@ eqtl [options]
 | `-w, --window` | 1000000 | TSS 两侧 cis 窗（bp） |
 | `--pval-cis` | 1e-5 | cis 写出 p 阈值 |
 | `--pval-trans` | 1e-5 | trans/gw 写出 p 阈值 |
-| `--miss-hand` | filter | 缺失 GT：`filter` \| `impute` |
+| `--miss-hand` | filter | `filter` \| `impute` |
 | `--max-miss` | 0 | 缺失比例超过该值则丢 SNP |
 | `--maf` | 0 | 最小 MAF（`0`=关） |
 | `--fast` | 关 | LMM：GRM 稀疏近似；glm/glmm：固定 null phi/sigma2 |
@@ -78,9 +68,10 @@ eqtl [options]
 
 ### 基因型（`-v/--vcf` 或 `-b/--bfile`）
 
-`--vcf`（VCF/BCF，GT）与 `--bfile`（PLINK `.bed`/`.bim`/`.fam` 前缀）二选一。
-
-VCF/BCF 索引用 **bcftools**：
+| 输入 | 文件 |
+|------|------|
+| `--vcf` | VCF/BCF，字段 **GT** |
+| `--bfile` | PLINK `.bed`/`.bim`/`.fam` |
 
 ```bash
 bcftools index -t panel.vcf.gz
@@ -96,8 +87,6 @@ bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf
 
 ### 表型（`-e/--pheno`）
 
-TSV：行=样本，列=基因。
-
 ```text
 sample	geneA	geneB
 S1	1.2	3.4
@@ -107,11 +96,11 @@ S2	0.5	2.1
 | 项 | |
 |------|--|
 | 表头 | 必需 |
-| 第1列 | sample ID |
+| 第1列 | `sample` |
 | 其余列头 | gene ID |
 | `lm` / `lmm` | 连续值 |
 | `glm` / `glmm` | 非负计数 |
-| 缺失 | `NA` / `NaN` / `.` → 该基因丢该样本（GCTA 风） |
+| 缺失 | `NA` / `NaN` / `.` → 该基因丢该样本 |
 
 ### 协变量（`-c/--covar`）
 
@@ -121,16 +110,16 @@ S1	0	1.2
 S2	1	0.3
 ```
 
-第1列=样本 ID；其余列=协变量。
+第1列=`sample`；其余列=协变量。
 
 ### 注释（`-g/--gff`）
 
-GFF3 `gene` 行。基因 ID 取 `ID`，否则 `Name` / `gene_id`（可用 `--gff-id-key`）。
+GFF3 `gene` 行。基因 ID：`ID`，否则 `Name` / `gene_id`（`--gff-id-key`）。
 
 | 项 | 定义 |
 |----|------|
 | TSS | `+`→start；`−`→end（GFF 1-based） |
-| cis 区间 | `[TSS−W, TSS+W]`（`-w`，bp） |
+| cis | `[TSS−W, TSS+W]`（`-w`，bp） |
 
 ### 亲缘矩阵（`-k/--grm`）
 
@@ -142,8 +131,6 @@ GFF3 `gene` 行。基因 ID 取 `ID`，否则 `Name` / `gene_id`（可用 `--gff
 `--make-grm` 写上述两文件后退出。
 
 ## 输出文件
-
-前缀 `-o PREFIX`。明文 TSV，每个 model×scope：
 
 ```text
 {PREFIX}.{model}.{scope}.pairs.tsv
@@ -162,7 +149,7 @@ GFF3 `gene` 行。基因 ID 取 `ID`，否则 `Name` / `gene_id`（可用 `--gff
 | `gene` | 基因 ID |
 | `snp` | 变异 ID 或 `chrom:pos:ref:alt` |
 | `chrom` | contig |
-| `pos` | 1-based 坐标 |
+| `pos` | 1-based |
 | `ref` / `alt` | 等位基因；beta 对应 alt 剂量 |
 | `maf` | MAF |
 | `beta` / `se` / `stat` / `p` | 关联 |
