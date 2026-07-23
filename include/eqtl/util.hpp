@@ -26,6 +26,12 @@ bool chrom_equal(const std::string& a, const std::string& b);
 double pnorm_two_sided(double z);
 double p_from_t(double t, double df);
 
+// MAF gate: keep if maf_min <= MAF <= 1-maf_min; maf_min<=0 disables
+inline bool pass_maf(double maf, double maf_min) {
+  if (maf_min <= 0.0) return true;
+  return !(maf < maf_min || maf > (1.0 - maf_min));
+}
+
 // beta cdf for beta approx (incomplete beta via continued fraction)
 double beta_cdf(double x, double a, double b);
 

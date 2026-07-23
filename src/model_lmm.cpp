@@ -5,11 +5,7 @@
 
 namespace eqtl {
 
-// Spectral LMM (GEMMA/FaST-LMM style):
-//   K = Q diag(lambda) Q'
-//   Var ∝ delta * lambda_j + 1   (delta = sigma_g^2 / sigma_e^2)
-// Null REML for delta (fixed effects X only), then Wald tests with delta fixed.
-// No per-SNP re-REML. No score test.
+// Spectral LMM: K=QΛQ', Var∝δλ+1; null REML on X then fixed-δ Wald. No per-SNP re-REML.
 
 static double reml_negll(double delta, const Eigen::VectorXd& y_til,
                          const Eigen::MatrixXd& X_til,

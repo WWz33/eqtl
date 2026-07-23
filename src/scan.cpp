@@ -101,10 +101,9 @@ Eigen::VectorXd subset_dosage(const std::vector<double>& full, const std::vector
   return g;
 }
 
-// If dosage length already equals keep size (pre-subset), copy into VectorXd
+// dosage may live in a reused SnpRec buffer — always own a copy for regression
 Eigen::VectorXd dosage_vec(const SnpRec& snp, const GeneReady& gr) {
   if (static_cast<int>(snp.dosage.size()) == static_cast<int>(gr.keep.size())) {
-    // Explicit copy: snp may be a reused buffer overwritten on next stream step
     Eigen::VectorXd g(static_cast<int>(snp.dosage.size()));
     std::memcpy(g.data(), snp.dosage.data(), sizeof(double) * snp.dosage.size());
     return g;
@@ -456,7 +455,6 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           if (!locp) continue;
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
-          // Stream region (no vector<SnpRec> materialization)
           auto stream = [&](const std::function<void(const SnpRec&)>& take) {
             geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
               take(s);

@@ -134,7 +134,6 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   const int ns_all = bcf_hdr_nsamples(hdr);
   if (ns_all <= 0 || ngt_ % ns_all != 0) return false;
   const int max_pl = ngt_ / ns_all;
-  // Reuse dosage storage (same size across SNPs for fixed sample order)
   if (static_cast<int>(out.dosage.size()) != n_an) out.dosage.resize(static_cast<size_t>(n_an));
   std::fill(out.dosage.begin(), out.dosage.end(), std::numeric_limits<double>::quiet_NaN());
   int n_miss = 0;
@@ -166,7 +165,6 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   if (miss_frac > miss.max_miss + 1e-15) return false;
   if (miss.hand == MissHand::Filter && miss.max_miss <= 0.0 && n_miss > 0) return false;
 
-  // MAF / QC before filling allele strings (same numeric path)
   double maf = (sum / static_cast<double>(n_ok)) / 2.0;
   if (maf > 0.5) maf = 1.0 - maf;
   if (maf < 1e-12) return false;
@@ -190,11 +188,6 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   return true;
 }
 
-static bool pass_maf_vcf(double maf, double maf_min) {
-  if (maf_min <= 0.0) return true;
-  return !(maf < maf_min || maf > (1.0 - maf_min));
-}
-
 void VcfSession::for_each_snp(const MissPolicy& miss, double maf_min,
                               const std::function<bool(const SnpRec&)>& fn) {
   if (!fp_ || !hdr_ || !rec_) die("VCF not open");
@@ -204,7 +197,7 @@ void VcfSession::for_each_snp(const MissPolicy& miss, double maf_min,
   auto* rec = static_cast<bcf1_t*>(rec_);
   while (bcf_read(rfp, rh, rec) == 0) {
     if (!parse_record(rec, miss, snp_reuse_)) continue;
-    if (!pass_maf_vcf(snp_reuse_.maf, maf_min)) continue;
+    if (!pass_maf(snp_reuse_.maf, maf_min)) continue;
     if (!fn(snp_reuse_)) break;
   }
 }
@@ -255,7 +248,7 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
   if (idx_ && use_bcf_itr) {
     while ((ret = bcf_itr_next(rfp, itr, rec)) >= 0) {
       if (!parse_record(rec, miss, snp_reuse_)) continue;
-      if (!pass_maf_vcf(snp_reuse_.maf, maf_min)) continue;
+      if (!pass_maf(snp_reuse_.maf, maf_min)) continue;
       if (!fn(snp_reuse_)) break;
     }
   } else {
@@ -263,7 +256,7 @@ void VcfSession::for_each_snp_region(const std::string& chrom, int64_t start, in
     while ((ret = tbx_itr_next(rfp, static_cast<tbx_t*>(tbx_), itr, &sstr)) >= 0) {
       if (vcf_parse1(&sstr, rh, rec) < 0) continue;
       if (!parse_record(rec, miss, snp_reuse_)) continue;
-      if (!pass_maf_vcf(snp_reuse_.maf, maf_min)) continue;
+      if (!pass_maf(snp_reuse_.maf, maf_min)) continue;
       if (!fn(snp_reuse_)) break;
     }
     free(sstr.s);

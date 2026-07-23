@@ -4,7 +4,6 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
-#include <cstring>
 #include <fstream>
 
 namespace eqtl {
@@ -80,7 +79,6 @@ void PlinkBed::open_bed(const std::string& path) {
   }
   bed_fp_ = std::fopen(path.c_str(), "rb");
   if (!bed_fp_) die("cannot open " + path);
-  // Large stdio buffer for sequential reads
   file_buf_.assign(1 << 20, 0);
   std::setvbuf(bed_fp_, file_buf_.data(), _IOFBF, file_buf_.size());
 

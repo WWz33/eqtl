@@ -47,7 +47,6 @@ public:
                                   const MissPolicy& miss, double maf_min);
 
 private:
-  // Larger sequential fread chunks (I/O only; decode math unchanged)
   static constexpr size_t kBlockSnps = 4096;
 
   std::string prefix_;
@@ -58,11 +57,9 @@ private:
   size_t bytes_per_snp_ = 0;
   std::vector<int> sample_col_;
   std::vector<uint8_t> block_buf_;
-  std::vector<char> file_buf_; // setvbuf for bed FILE*
-  // chrom_key -> [lo, hi) in sites_
+  std::vector<char> file_buf_;
   std::unordered_map<std::string, std::pair<size_t, size_t>> chrom_range_;
   int8_t pair_lut_[4]{};
-  // Reused across SNPs in a scan (avoids per-SNP vector realloc)
   SnpRec snp_reuse_;
 
   void read_fam(const std::string& path);
@@ -78,10 +75,5 @@ private:
   bool for_each_range_pos(size_t lo, size_t hi, int64_t p0, int64_t p1, const MissPolicy& miss,
                           double maf_min, const std::function<bool(const SnpRec&)>& fn);
 };
-
-inline bool pass_maf(double maf, double maf_min) {
-  if (maf_min <= 0.0) return true;
-  return !(maf < maf_min || maf > (1.0 - maf_min));
-}
 
 } // namespace eqtl
