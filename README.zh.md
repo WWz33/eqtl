@@ -14,8 +14,14 @@
 git clone https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
+# 用 GCTA 算 GRM（先从 smoke VCF 转 PLINK bed）
+plink --vcf data/smoke.vcf.gz --make-bed --out data/smoke
+gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
+
+# LMM eQTL（默认 --model lmm）
 ./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
-  --model lm --mode cis --perm 0 --miss-hand impute -o data/out
+  -k data/smoke_grm --model lmm --mode cis --perm 0 --miss-hand impute \
+  -o data/out
 ```
 
 ## Usage
