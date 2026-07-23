@@ -50,7 +50,7 @@ eqtl [options]
 | 选项 | 默认 | 说明 |
 |------|------|------|
 | `-v, --vcf` | * | VCF/BCF 基因型（GT）；与 `--bfile` 二选一 |
-| `-b, --bfile` | * | PLINK 前缀 `.bed`/`.bim`/`.fam` |
+| `-b, --bfile` | * | PLINK bfile 前缀 |
 | `-e, --pheno` | 必选* | 表型矩阵（第1列 sample） |
 | `-g, --gff` | — | GFF3 gene 特征 |
 | `--gff-id-key` | — | GFF 基因 ID 属性名 |
@@ -64,7 +64,7 @@ eqtl [options]
 | `--pval-trans` | 1e-5 | trans/gw 写出 p 阈值 |
 | `--miss-hand` | filter | 缺失 GT：`filter` \| `impute` |
 | `--max-miss` | 0 | 缺失比例超过该值则丢 SNP |
-| `--maf` | 0 | 分析样本上最小 MAF（`0`=关） |
+| `--maf` | 0 | 最小 MAF（`0`=关） |
 | `--fast` | 关 | 每基因共享方差/离散参数 |
 | `--perm` | 10000 | 基因级置换（`0`=关） |
 | `--seed` | — | 置换种子 |
@@ -78,22 +78,15 @@ eqtl [options]
 
 ### 基因型（`-v/--vcf` 或 `-b/--bfile`）
 
-二选一：
+`--vcf`（VCF/BCF，GT）与 `--bfile`（PLINK `.bed`/`.bim`/`.fam` 前缀）二选一。
 
-- **VCF/BCF**（`-v`）：仅用 **GT**（0/1/2）。多等位位点不使用。
-- **PLINK**（`-b PREFIX`）：`PREFIX.bed`/`.bim`/`.fam`（SNP-major）。dosage = **A1** 拷贝数（bim 第5列），与 GEMMA/quasar 一致。样本 ID = fam **IID**。
-
-VCF/BCF 索引用 **bcftools**（本程序不生成索引）：
+VCF/BCF 索引用 **bcftools**：
 
 ```bash
-bcftools index -t panel.vcf.gz    # TBI
+bcftools index -t panel.vcf.gz
 # 或
-bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf   # CSI
+bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf
 ```
-
-无 CSI/TBI 时，cis 区域查询会扫全 VCF。
-
-`--maf`：在 **分析样本**（pheno∩geno、非缺失）上保留 `maf_min ≤ MAF ≤ 1−maf_min`（GCTA/GEMMA 风格）。默认 `0` = 不滤。
 
 | `--miss-hand` | `--max-miss` | 效果 |
 |---------------|--------------|------|

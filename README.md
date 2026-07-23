@@ -50,7 +50,7 @@ eqtl [options]
 | Flag | Default | Effect |
 |------|---------|--------|
 | `-v, --vcf` | * | VCF/BCF genotypes (GT); exclusive with `--bfile` |
-| `-b, --bfile` | * | PLINK prefix `.bed`/`.bim`/`.fam` |
+| `-b, --bfile` | * | PLINK bfile prefix |
 | `-e, --pheno` | required* | phenotype matrix (col1=sample) |
 | `-g, --gff` | — | GFF3 gene features |
 | `--gff-id-key` | — | GFF attribute for gene id |
@@ -64,7 +64,7 @@ eqtl [options]
 | `--pval-trans` | 1e-5 | trans/gw output p threshold |
 | `--miss-hand` | filter | `filter` \| `impute` missing GT |
 | `--max-miss` | 0 | drop SNP if missing fraction > value |
-| `--maf` | 0 | min MAF on analysis samples (`0`=off) |
+| `--maf` | 0 | min MAF (`0`=off) |
 | `--fast` | off | share variance/dispersion params per gene |
 | `--perm` | 10000 | gene-level permutations (`0`=off) |
 | `--seed` | — | permutation seed |
@@ -78,22 +78,15 @@ eqtl [options]
 
 ### Genotypes (`-v/--vcf` or `-b/--bfile`)
 
-Exactly one of:
+Exactly one of `--vcf` (VCF/BCF, GT) or `--bfile` (PLINK `.bed`/`.bim`/`.fam` prefix).
 
-- **VCF/BCF** (`-v`): field **GT** only (0/1/2). Multiallelic sites not used.
-- **PLINK** (`-b PREFIX`): `PREFIX.bed` + `.bim` + `.fam` (SNP-major). Dosage = count of **A1** (bim col5), same encoding as GEMMA/quasar. Sample IDs = fam **IID**.
-
-Index VCF/BCF with **bcftools** (not built into `eqtl`):
+Index VCF/BCF with **bcftools**:
 
 ```bash
-bcftools index -t panel.vcf.gz    # TBI
+bcftools index -t panel.vcf.gz
 # or
-bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf   # CSI
+bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf
 ```
-
-Without CSI/TBI, region (cis) queries scan the whole VCF.
-
-`--maf`: keep SNPs with `maf_min ≤ MAF ≤ 1−maf_min` among **analysis samples** (pheno∩geno, non-missing), GCTA/GEMMA-style. Default `0` = off.
 
 | `--miss-hand` | `--max-miss` | Effect |
 |---------------|--------------|--------|
