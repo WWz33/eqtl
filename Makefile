@@ -1,8 +1,35 @@
 # eqtl — cis/trans eQTL (C++17)
 # Vendored: third_party/htslib @ 1.24, third_party/gffsub, third_party/eigen
+# Linear algebra: Eigen + optional OpenBLAS/LAPACKE (same formulas; faster kernels)
 CXX ?= g++
 CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wno-unused-parameter -fopenmp
 CPPFLAGS += -Iinclude -Ithird_party/eigen -Ithird_party/gffsub/src
+
+# ---- OpenBLAS (Eigen BLAS/LAPACKE backend; does not change model formulas) ----
+# USE_OPENBLAS=0  pure Eigen
+# USE_OPENBLAS=1  require OpenBLAS+LAPACKE (default when pkg-config finds openblas)
+USE_OPENBLAS ?= auto
+ifeq ($(USE_OPENBLAS),auto)
+  ifneq ($(shell pkg-config --exists openblas && echo yes),)
+    USE_OPENBLAS := 1
+  else
+    USE_OPENBLAS := 0
+  endif
+endif
+ifeq ($(USE_OPENBLAS),1)
+  OPENBLAS_CFLAGS := $(shell pkg-config --cflags openblas 2>/dev/null)
+  OPENBLAS_LIBS := $(shell pkg-config --libs openblas 2>/dev/null)
+  ifeq ($(OPENBLAS_LIBS),)
+    OPENBLAS_LIBS := -lopenblas
+  endif
+  LAPACKE_LIBS := $(shell pkg-config --libs lapacke 2>/dev/null)
+  ifeq ($(LAPACKE_LIBS),)
+    LAPACKE_LIBS := -llapacke
+  endif
+  # BLAS for gemm/gemv; LAPACKE for SelfAdjointEigenSolver etc.
+  CPPFLAGS += -DEIGEN_USE_BLAS -DEIGEN_USE_LAPACKE $(OPENBLAS_CFLAGS)
+  LDFLAGS += $(OPENBLAS_LIBS) $(LAPACKE_LIBS)
+endif
 
 # ---- htslib (default: vendored static) ----
 USE_SYSTEM_HTS ?= 0
@@ -79,6 +106,7 @@ $(HTS_LIB) $(HTS_SRC)/htslib_static.mk:
 
 $(BIN): $(OBJ) $(GFFSUB_OBJ) $(HTS_REQ)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJ) $(GFFSUB_OBJ) $(LDFLAGS)
+	@if [ "$(USE_OPENBLAS)" = "1" ]; then echo "[I] linked OpenBLAS+LAPACKE (EIGEN_USE_BLAS)"; else echo "[I] pure Eigen (no OpenBLAS)"; fi
 
 src/%.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
