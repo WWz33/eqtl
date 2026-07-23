@@ -1,4 +1,5 @@
-eqtl
+# binary at repo root only
+/eqtl
 *.o
 *.a
 *.so
@@ -16,5 +17,8 @@ third_party/gsl/
 data/*_*.tsv
 data/v2*
 data/hermes_*
-data/tmp*
-data/*grm*
+data/r3*
+data/r2*
+data/rv*
+data/hv_*
+data/gold_*
