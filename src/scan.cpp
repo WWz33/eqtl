@@ -6,6 +6,10 @@
 #include <fstream>
 #include <random>
 #include <atomic>
+#include <future>
+#include <sstream>
+#include <mutex>
+#include <thread>
 #include <omp.h>
 #include <limits>
 #include <cmath>
@@ -246,18 +250,19 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
 
   AssocHit best;
   best.p = 2.0;
-  std::vector<double> pvals;
+  AcatAcc acat_acc;
   int n_tested = 0;
   summary.n_sig = 0;
-  Eigen::VectorXd g_buf; // reused across SNPs
-  // cache dosage for perm reuse (avoids re-reading genotypes)
+  Eigen::VectorXd g_buf;
+  // perm: cache only SNPs with p <= max(pthr, 0.05) — O(M) worst-case avoided
   std::vector<Eigen::VectorXd> cached_dosage;
   const bool do_perm = opt.perm > 0;
+  const double perm_cache_thr = std::max(pthr, 0.05);
 
   auto apply_hit = [&](AssocHit& h, const SnpRec& snp) {
     if (!std::isfinite(h.p)) return;
     ++n_tested;
-    pvals.push_back(h.p);
+    acat_acc.add(h.p);
     if (h.p <= pthr) {
       fill_snp_id(h, snp);
       write_pair_line(out.pairs, h, model, scope);
@@ -272,8 +277,8 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   stream_snps([&](const SnpRec& snp) {
     AssocHit h = test_one(model, opt.fast, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true, g_buf);
     apply_hit(h, snp);
-    if (do_perm && std::isfinite(h.p)) {
-      cached_dosage.push_back(g_buf); // save dosage for perm
+    if (do_perm && std::isfinite(h.p) && h.p <= perm_cache_thr) {
+      cached_dosage.push_back(g_buf);
     }
   });
 
@@ -283,7 +288,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     summary.chrom = loc->chrom;
     summary.tss = loc->tss;
   }
-  summary.acat_p = acat(pvals);
+  summary.acat_p = acat_acc.p();
 
   // Gene-level min-p perm (default --perm 0).
   // LM: residualize X then shuffle (Freedman–Lane).
@@ -577,10 +582,13 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
       }
 
       gty.noalias() = Ys * g_s;
+      // ponytail: gene loop OpenMP; pairs write critical (result order may differ across SNPs only)
+#pragma omp parallel for schedule(static) if (opt.threads > 1 && Gz > 32) num_threads(opt.threads)
       for (int gi = 0; gi < Gz; ++gi) {
         auto& job = jobs[static_cast<size_t>(gi)];
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
         AssocHit h = hit_from_gty(job.prep, gtg, gty(gi), maf_sub);
+#pragma omp critical(eqtl_pairs)
         apply_snp_hit(job, h, snp, pthr, Model::Lm, out);
       }
       return true;
@@ -764,10 +772,18 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       double maf_sub = snp.maf;
       if (!std::isfinite(subset_maf_or_nan(g_buf, &maf_sub))) return true;
       g_til.noalias() = Q.transpose() * g_buf;
-      for (auto& job : jobs) {
-        if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
-        AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws);
-        apply_snp_hit(job, h, snp, pthr, Model::Lmm, out);
+      // per-thread LmmTestWs (ws above is serial fallback)
+#pragma omp parallel if (opt.threads > 1 && jobs.size() > 32) num_threads(opt.threads)
+      {
+        LmmTestWs ws_t;
+#pragma omp for schedule(static)
+        for (int ji = 0; ji < static_cast<int>(jobs.size()); ++ji) {
+          auto& job = jobs[static_cast<size_t>(ji)];
+          if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
+          AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws_t);
+#pragma omp critical(eqtl_pairs)
+          apply_snp_hit(job, h, snp, pthr, Model::Lmm, out);
+        }
       }
       return true;
     });
@@ -842,6 +858,139 @@ int run_make_grm(const Options& opt) {
     write_grm_gcta(opt.out, g);
   }
   return 0;
+}
+
+
+// cis: per-thread PlinkBed (independent FILE*) — genes sorted by chrom/TSS, chunked
+static void run_cis_bfile_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
+                                   const std::unordered_map<std::string, GeneLoc>& annot,
+                                   Eigen::MatrixXd* Kptr, bool need_k, bool need_lmm_basis,
+                                   Model model, ScopeOut& so, double pthr,
+                                   std::vector<GeneSummary>& summaries) {
+  struct GeneWork {
+    int gi = -1;
+    std::string gene;
+    GeneLoc loc;
+  };
+  std::vector<GeneWork> works;
+  works.reserve(ph.gene_ids.size());
+  for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
+    const std::string& gene = ph.gene_ids[gi];
+    auto it = annot.find(gene);
+    if (it == annot.end()) continue;
+    if (needs_counts(model) && !looks_like_counts(ph.Y.col(static_cast<int>(gi)))) {
+      warn("skip non-count gene for " + model_str(model) + ": " + gene);
+      continue;
+    }
+    works.push_back(GeneWork{static_cast<int>(gi), gene, it->second});
+  }
+  std::sort(works.begin(), works.end(), [](const GeneWork& a, const GeneWork& b) {
+    if (a.loc.chrom != b.loc.chrom) return a.loc.chrom < b.loc.chrom;
+    return a.loc.tss < b.loc.tss;
+  });
+
+  const int T = std::max(1, opt.threads);
+  const MissPolicy mp{opt.miss, opt.max_miss};
+  const double maf = opt.maf;
+  std::vector<std::vector<GeneSummary>> part(static_cast<size_t>(T));
+  std::vector<std::string> pairs_part(static_cast<size_t>(T));
+  std::vector<std::string> top_part(static_cast<size_t>(T));
+  std::atomic<int> err{0};
+
+  LmmBasis grm_basis;
+  bool have_grm_basis = false;
+  if (need_lmm_basis && Kptr && Kptr->rows() == static_cast<int>(ph.sample_ids.size())) {
+    Eigen::MatrixXd K_use = *Kptr;
+    if (opt.fast) sparsify_grm(K_use, 1e-4);
+    grm_basis = make_lmm_basis(K_use);
+    have_grm_basis = true;
+  }
+
+#pragma omp parallel num_threads(T)
+  {
+    const int tid = omp_get_thread_num();
+    const int nT = omp_get_num_threads();
+    try {
+      PlinkBed bed;
+      bed.open(opt.bfile);
+      bed.set_sample_order(ph.sample_ids);
+      std::ostringstream pairs_ss, top_ss;
+      // write headers only on merge; body only here
+      ScopeOut local;
+      // use stringstream via temporary files in memory — ScopeOut needs ostream
+      // ponytail: thread-local ofstream to temp path
+      const std::string t_pairs = opt.out + ".tmp." + std::to_string(tid) + ".pairs";
+      const std::string t_top = opt.out + ".tmp." + std::to_string(tid) + ".top";
+      const std::string t_region = opt.out + ".tmp." + std::to_string(tid) + ".region";
+      local.tag = "cis";
+      local.pairs.open(t_pairs);
+      local.top.open(t_top);
+      local.region.open(t_region);
+      // no headers in temps
+
+      const size_t nW = works.size();
+      const size_t chunk = (nW + static_cast<size_t>(nT) - 1) / static_cast<size_t>(nT);
+      const size_t lo = static_cast<size_t>(tid) * chunk;
+      const size_t hi = std::min(nW, lo + chunk);
+      for (size_t wi = lo; wi < hi; ++wi) {
+        const auto& w = works[wi];
+        Eigen::VectorXd y = ph.Y.col(w.gi);
+        GeneReady gr;
+        bool y_has_na = false;
+        for (int i = 0; i < y.size(); ++i)
+          if (!std::isfinite(y(i))) { y_has_na = true; break; }
+        if (have_grm_basis && !y_has_na) {
+          gr.keep.resize(static_cast<size_t>(y.size()));
+          std::iota(gr.keep.begin(), gr.keep.end(), 0);
+          gr.y = y;
+          gr.X = cov.X;
+          gr.basis = grm_basis;
+          gr.has_basis = true;
+        } else {
+          if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
+        }
+        GeneSummary summary;
+        const GeneLoc* locp = &w.loc;
+        const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
+        const int64_t cend = locp->tss + opt.window;
+        auto stream = [&](auto&& take) {
+          bed.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
+            take(s);
+            return true;
+          });
+        };
+        scan_gene_snps(opt, model, "cis", w.gene, gr, locp, pthr, local, summary, stream);
+        part[static_cast<size_t>(tid)].push_back(std::move(summary));
+      }
+      local.pairs.close();
+      local.top.close();
+      local.region.close();
+      pairs_part[static_cast<size_t>(tid)] = t_pairs;
+      top_part[static_cast<size_t>(tid)] = t_top;
+      // drop empty region temps later
+      (void)t_region;
+    } catch (...) {
+      err.store(1);
+    }
+  }
+  if (err.load()) die("cis parallel scan failed");
+
+  // merge pairs/top temps in thread order (= gene chrom/TSS order within chunks; chunks by sort)
+  auto cat_file = [](std::ostream& dst, const std::string& path) {
+    std::ifstream in(path);
+    if (!in) return;
+    dst << in.rdbuf();
+    std::remove(path.c_str());
+  };
+  for (int tid = 0; tid < T; ++tid) {
+    if (!pairs_part[static_cast<size_t>(tid)].empty())
+      cat_file(so.pairs, pairs_part[static_cast<size_t>(tid)]);
+    if (!top_part[static_cast<size_t>(tid)].empty())
+      cat_file(so.top, top_part[static_cast<size_t>(tid)]);
+    for (auto& s : part[static_cast<size_t>(tid)]) summaries.push_back(std::move(s));
+    // cleanup region temp
+    std::remove((opt.out + ".tmp." + std::to_string(tid) + ".region").c_str());
+  }
 }
 
 template <typename G>
@@ -984,6 +1133,10 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         scan_lmm_snp_outer(opt, geno, mp, maf, scope, so, pthr, jobs);
         summaries.reserve(jobs.size());
         for (auto& j : jobs) summaries.push_back(std::move(j.summary));
+      } else if (scope == "cis" && opt.use_bfile() && opt.threads > 1 && have_gff) {
+        info("cis: per-thread PlinkBed (" + std::to_string(opt.threads) + " threads)");
+        run_cis_bfile_parallel(opt, ph, cov, annot, Kptr, need_k, need_lmm_basis, model, so, pthr,
+                               summaries);
       } else {
         // shared GRM eigen once; only use when y has no NA (else build_gene_ready per gene)
         LmmBasis grm_basis;
