@@ -12,6 +12,7 @@
 #include <numeric>
 #include <unordered_map>
 #include <cstring>
+#include <cstdlib>
 
 namespace eqtl {
 
@@ -22,6 +23,9 @@ struct ScopeOut {
   std::ofstream top;
   std::ofstream region;
   std::string tag;
+  std::vector<char> pairs_buf;
+  std::vector<char> top_buf;
+  std::vector<char> region_buf;
 };
 
 bool needs_grm(Model m) {
@@ -169,6 +173,11 @@ double subset_maf_or_nan(const Eigen::VectorXd& g, double* maf_out) {
 }
 
 // Test one SNP; fills meta only if p passes threshold (lazy string fill)
+static void fill_snp_id(AssocHit& h, const SnpRec& snp) {
+  if (!snp.id.empty()) h.snp = snp.id;
+  else h.snp = snp.chrom + ":" + std::to_string(snp.pos) + ":" + snp.ref + ":" + snp.alt;
+}
+
 AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp,
                   const std::string& gene, const GeneLoc* loc, GenePrepLm* lm_c, GenePrepLmm* lmm_c,
                   GenePrepGlm* glm_c, GenePrepGlmm* glmm_c, bool have_cache,
@@ -192,7 +201,6 @@ AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp
   h.n = static_cast<int>(gr.keep.size());
   // defer string fills — caller fills gene/snp/chrom/ref/alt only when needed
   h.gene = gene;
-  h.snp = snp.id;
   h.chrom = snp.chrom;
   h.pos = snp.pos;
   h.ref = snp.ref;
@@ -219,11 +227,23 @@ bool in_cis_window(const SnpRec& s, const GeneLoc& loc, int window) {
   return s.pos >= cstart && s.pos <= cend;
 }
 
+int chrom_rank(const std::string& c) {
+  std::string k = chrom_key(c);
+  if (k == "X" || k == "x") return 23;
+  if (k == "Y" || k == "y") return 24;
+  if (k == "MT" || k == "M" || k == "mt" || k == "m") return 25;
+  char* end = nullptr;
+  long v = std::strtol(k.c_str(), &end, 10);
+  if (end && *end == '\0' && v >= 1 && v <= 22) return static_cast<int>(v);
+  return 99;
+}
+
 // Stream SNPs for one gene (list path removed; all callers stream).
+template <typename StreamFn>
 void scan_gene_snps(const Options& opt, Model model, const std::string& scope, const std::string& gene,
                     const GeneReady& gr, const GeneLoc* loc, double pthr, ScopeOut& out,
                     GeneSummary& summary,
-                    const std::function<void(const std::function<void(const SnpRec&)>&)>& stream_snps) {
+                    StreamFn&& stream_snps) {
   GenePrepLm lm_c;
   GenePrepLmm lmm_c;
   GenePrepGlm glm_c;
@@ -240,20 +260,24 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   std::vector<Eigen::VectorXd> cached_dosage;
   const bool do_perm = opt.perm > 0;
 
-  auto apply_hit = [&](const AssocHit& h) {
+  auto apply_hit = [&](AssocHit& h, const SnpRec& snp) {
     if (!std::isfinite(h.p)) return;
     ++n_tested;
     pvals.push_back(h.p);
     if (h.p <= pthr) {
+      fill_snp_id(h, snp);
       write_pair_line(out.pairs, h, model, scope);
       ++summary.n_sig;
     }
-    if (h.p < best.p) best = h;
+    if (h.p < best.p) {
+      fill_snp_id(h, snp);
+      best = h;
+    }
   };
 
   stream_snps([&](const SnpRec& snp) {
     AssocHit h = test_one(model, opt.fast, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true, g_buf);
-    apply_hit(h);
+    apply_hit(h, snp);
     if (do_perm && std::isfinite(h.p)) {
       cached_dosage.push_back(g_buf); // save dosage for perm
     }
@@ -288,8 +312,16 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
       }
     }
 
-    // ponytail: perm uses cached_dosage (memory), no re-read, no critical
-#pragma omp parallel for schedule(dynamic) if (opt.threads > 1)
+    // ponytail: build grb once outside loop; only y changes per perm
+    GeneReady grb;
+    grb.keep = gr.keep;
+    grb.X = gr.X;
+    grb.K = gr.K;
+    grb.basis = gr.basis;
+    grb.has_basis = gr.has_basis;
+    grb.y.resize(y_perm_base.size());
+
+#pragma omp parallel for schedule(dynamic) if (opt.threads > 1) firstprivate(grb)
     for (int b = 0; b < opt.perm; ++b) {
       std::mt19937 rng_b(static_cast<unsigned>(opt.seed >= 0 ? opt.seed : 1) +
                          static_cast<unsigned>(b) * 9973u +
@@ -299,14 +331,6 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
       std::iota(idx.begin(), idx.end(), 0);
       std::shuffle(idx.begin(), idx.end(), rng_b);
 
-      // share K/basis/X by const ref; only y shuffled
-      GeneReady grb;
-      grb.keep = gr.keep;
-      grb.X = gr.X;  // ponytail: shallow copy ok, Eigen COW
-      grb.K = gr.K;
-      grb.basis = gr.basis;
-      grb.has_basis = gr.has_basis;
-      grb.y.resize(y_perm_base.size());
       for (int i = 0; i < y_perm_base.size(); ++i)
         grb.y(i) = y_perm_base(idx[static_cast<size_t>(i)]);
 
@@ -457,12 +481,12 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       so.top.open(prefix + ".top.tsv");
       so.region.open(prefix + ".region.tsv");
       if (!so.pairs || !so.top || !so.region) die("cannot open output for " + prefix);
-      static char pairs_buf[1 << 20];
-      static char top_buf[1 << 16];
-      static char region_buf[1 << 16];
-      so.pairs.rdbuf()->pubsetbuf(pairs_buf, sizeof(pairs_buf));
-      so.top.rdbuf()->pubsetbuf(top_buf, sizeof(top_buf));
-      so.region.rdbuf()->pubsetbuf(region_buf, sizeof(region_buf));
+      so.pairs_buf.assign(4 << 20, 0);
+      so.top_buf.assign(1 << 16, 0);
+      so.region_buf.assign(1 << 16, 0);
+      so.pairs.rdbuf()->pubsetbuf(so.pairs_buf.data(), so.pairs_buf.size());
+      so.top.rdbuf()->pubsetbuf(so.top_buf.data(), so.top_buf.size());
+      so.region.rdbuf()->pubsetbuf(so.region_buf.data(), so.region_buf.size());
       write_pairs_header(so.pairs, model);
       write_top_header(so.top, model);
       write_region_header(so.region);
@@ -470,7 +494,23 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       const double pthr = (scope == "cis") ? opt.pval_cis : opt.pval_trans;
       std::vector<GeneSummary> summaries;
 
-      for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
+      std::vector<size_t> gene_order(ph.gene_ids.size());
+      std::iota(gene_order.begin(), gene_order.end(), 0);
+      if (scope == "cis" && have_gff) {
+        std::sort(gene_order.begin(), gene_order.end(), [&](size_t a, size_t b) {
+          auto it_a = annot.find(ph.gene_ids[a]);
+          auto it_b = annot.find(ph.gene_ids[b]);
+          if (it_a == annot.end() && it_b == annot.end()) return a < b;
+          if (it_a == annot.end()) return false;
+          if (it_b == annot.end()) return true;
+          const int ra = chrom_rank(it_a->second.chrom);
+          const int rb = chrom_rank(it_b->second.chrom);
+          if (ra != rb) return ra < rb;
+          return it_a->second.tss < it_b->second.tss;
+        });
+      }
+
+      for (size_t gi : gene_order) {
         const std::string& gene = ph.gene_ids[gi];
         Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
 
@@ -501,8 +541,8 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           if (!locp) { summaries.pop_back(); continue; }
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
-          auto stream = [&](const std::function<void(const SnpRec&)>& take) {
-            geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
+          auto stream = [&](auto&& take) {
+            geno.for_each_snp_region_t(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
               take(s);
               return true;
             });
@@ -510,8 +550,8 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
         } else if (scope == "trans") {
           if (!locp) { summaries.pop_back(); continue; }
-          auto stream = [&](const std::function<void(const SnpRec&)>& take) {
-            geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
+          auto stream = [&](auto&& take) {
+            geno.for_each_snp_t(mp, maf, [&](const SnpRec& s) {
               if (in_cis_window(s, *locp, opt.window)) return true;
               take(s);
               return true;
@@ -519,8 +559,8 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           };
           scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
         } else {
-          auto stream = [&](const std::function<void(const SnpRec&)>& take) {
-            geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
+          auto stream = [&](auto&& take) {
+            geno.for_each_snp_t(mp, maf, [&](const SnpRec& s) {
               take(s);
               return true;
             });
@@ -552,6 +592,7 @@ int run_eqtl(const Options& opt) {
 
   VcfSession vcf;
   vcf.open(opt.vcf);
+  vcf.set_threads(opt.threads);
   std::vector<std::string> sample_order = intersect_order(ph.sample_ids, vcf.samples());
   if (sample_order.empty()) die("no overlapping samples between pheno and VCF");
   info("overlap samples: " + std::to_string(sample_order.size()));
