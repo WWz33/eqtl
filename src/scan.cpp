@@ -391,7 +391,8 @@ struct GeneLmJob {
   std::vector<double> pvals;
 };
 
-static void fill_hit_meta(AssocHit& h, const GeneLmJob& job, const SnpRec& snp) {
+template <typename Job>
+static void fill_hit_meta(AssocHit& h, const Job& job, const SnpRec& snp) {
   h.gene = job.gene;
   h.chrom = snp.chrom;
   h.pos = snp.pos;
@@ -404,14 +405,15 @@ static void fill_hit_meta(AssocHit& h, const GeneLmJob& job, const SnpRec& snp) 
   }
 }
 
-static void apply_lm_hit(GeneLmJob& job, AssocHit& h, const SnpRec& snp, double pthr,
-                         ScopeOut& out) {
+template <typename Job>
+static void apply_snp_hit(Job& job, AssocHit& h, const SnpRec& snp, double pthr, Model model,
+                          ScopeOut& out) {
   if (!std::isfinite(h.p)) return;
   ++job.summary.n_tested;
   job.pvals.push_back(h.p);
   if (h.p <= pthr) {
     fill_hit_meta(h, job, snp);
-    write_pair_line(out.pairs, h, Model::Lm, out.tag);
+    write_pair_line(out.pairs, h, model, out.tag);
     ++job.summary.n_sig;
   }
   if (h.p < job.best.p) {
@@ -422,9 +424,11 @@ static void apply_lm_hit(GeneLmJob& job, AssocHit& h, const SnpRec& snp, double 
 
 // Residualize g on prep.X (same as test_lm)
 static bool residualize_g(const GenePrepLm& prep, const Eigen::VectorXd& g, Eigen::VectorXd& g_s,
-                          double& gtg) {
-  const Eigen::VectorXd Xt_g = prep.X.transpose() * g;
-  g_s = g - prep.X * (prep.XtX_inv * Xt_g);
+                          double& gtg, Eigen::VectorXd& Xt_g_buf) {
+  if (Xt_g_buf.size() != prep.p) Xt_g_buf.resize(prep.p);
+  Xt_g_buf.noalias() = prep.X.transpose() * g;
+  if (g_s.size() != g.size()) g_s.resize(g.size());
+  g_s.noalias() = g - prep.X * (prep.XtX_inv * Xt_g_buf);
   gtg = g_s.squaredNorm();
   return gtg >= 1e-12;
 }
@@ -487,10 +491,9 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
     for (int gi = 0; gi < Gz; ++gi) Ys.row(gi) = jobs[static_cast<size_t>(gi)].prep.y_s.transpose();
     const auto& keep = jobs[0].gr.keep;
     const GenePrepLm& prep0 = jobs[0].prep;
+    Eigen::VectorXd g_full(n), g_s(n), gty(Gz), Xt_g_buf(prep0.p);
 
     geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
-      // trans: skip cis window per gene separately if needed
-      Eigen::VectorXd g_full(static_cast<int>(keep.size()));
       for (size_t r = 0; r < keep.size(); ++r) {
         const int i = keep[r];
         g_full(static_cast<int>(r)) =
@@ -501,10 +504,8 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
       double maf_sub = snp.maf;
       if (!std::isfinite(subset_maf_or_nan(g_full, &maf_sub))) return true;
 
-      Eigen::VectorXd g_s;
       double gtg = 0;
-      if (!residualize_g(prep0, g_full, g_s, gtg)) {
-        // monomorphic residual → p=1 for all genes that accept this SNP
+      if (!residualize_g(prep0, g_full, g_s, gtg, Xt_g_buf)) {
         for (int gi = 0; gi < Gz; ++gi) {
           auto& job = jobs[static_cast<size_t>(gi)];
           if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
@@ -512,32 +513,42 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
           h.p = 1.0;
           h.n = prep0.n;
           h.maf = maf_sub;
-          apply_lm_hit(job, h, snp, pthr, out);
+          apply_snp_hit(job, h, snp, pthr, Model::Lm, out);
         }
         return true;
       }
 
-      // gty_i = Ys.row(i) · g_s
-      const Eigen::VectorXd gty = Ys * g_s;
+      gty.noalias() = Ys * g_s;
       for (int gi = 0; gi < Gz; ++gi) {
         auto& job = jobs[static_cast<size_t>(gi)];
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
         AssocHit h = hit_from_gty(job.prep, gtg, gty(gi), maf_sub);
-        apply_lm_hit(job, h, snp, pthr, out);
+        apply_snp_hit(job, h, snp, pthr, Model::Lm, out);
       }
       return true;
     });
   } else {
-    // different keep: still one I/O pass
+    // different keep: still one I/O pass; reuse max-keep buffer
+    size_t maxk = 0;
+    for (const auto& j : jobs) maxk = std::max(maxk, j.gr.keep.size());
+    Eigen::VectorXd g_buf(static_cast<int>(maxk));
     geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
       for (auto& job : jobs) {
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
-        Eigen::VectorXd g = subset_dosage(snp.dosage, job.gr.keep);
+        const int nk = static_cast<int>(job.gr.keep.size());
+        if (g_buf.size() < nk) g_buf.resize(nk);
+        for (int r = 0; r < nk; ++r) {
+          const int i = job.gr.keep[static_cast<size_t>(r)];
+          g_buf(r) = (i >= 0 && static_cast<size_t>(i) < snp.dosage.size())
+                         ? snp.dosage[static_cast<size_t>(i)]
+                         : std::numeric_limits<double>::quiet_NaN();
+        }
+        Eigen::Map<Eigen::VectorXd> g(g_buf.data(), nk);
         double maf_sub = snp.maf;
         if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) continue;
         AssocHit h = test_lm(job.prep, g);
         h.maf = maf_sub;
-        apply_lm_hit(job, h, snp, pthr, out);
+        apply_snp_hit(job, h, snp, pthr, Model::Lm, out);
       }
       return true;
     });
@@ -564,35 +575,6 @@ struct GeneLmmJob {
   AssocHit best;
   std::vector<double> pvals;
 };
-
-static void fill_hit_meta_lmm(AssocHit& h, const GeneLmmJob& job, const SnpRec& snp) {
-  h.gene = job.gene;
-  h.chrom = snp.chrom;
-  h.pos = snp.pos;
-  h.ref = snp.ref;
-  h.alt = snp.alt;
-  fill_snp_id(h, snp);
-  if (job.has_loc && job.loc.ok) {
-    h.has_tss_dist = true;
-    h.tss_dist = static_cast<double>(snp.pos - job.loc.tss);
-  }
-}
-
-static void apply_lmm_hit(GeneLmmJob& job, AssocHit& h, const SnpRec& snp, double pthr,
-                          ScopeOut& out) {
-  if (!std::isfinite(h.p)) return;
-  ++job.summary.n_tested;
-  job.pvals.push_back(h.p);
-  if (h.p <= pthr) {
-    fill_hit_meta_lmm(h, job, snp);
-    write_pair_line(out.pairs, h, Model::Lmm, out.tag);
-    ++job.summary.n_sig;
-  }
-  if (h.p < job.best.p) {
-    fill_hit_meta_lmm(h, job, snp);
-    job.best = h;
-  }
-}
 
 // Workspace for LMM Wald — hoist out of per-gene / per-SNP loops
 struct LmmTestWs {
@@ -714,7 +696,7 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       for (auto& job : jobs) {
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
         AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws);
-        apply_lmm_hit(job, h, snp, pthr, out);
+        apply_snp_hit(job, h, snp, pthr, Model::Lmm, out);
       }
       return true;
     });
@@ -730,7 +712,7 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
         if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) continue;
         AssocHit h = test_lmm(job.prep, g);
         h.maf = maf_sub;
-        apply_lmm_hit(job, h, snp, pthr, out);
+        apply_snp_hit(job, h, snp, pthr, Model::Lmm, out);
       }
       return true;
     });
