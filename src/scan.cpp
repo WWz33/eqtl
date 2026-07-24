@@ -153,7 +153,8 @@ void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache
   }
 }
 
-// MAF + variance on gene keep; monomorphic/non-finite → NaN
+// Effect AF + variance on gene keep; monomorphic/non-finite → NaN.
+// *maf_out = effect-allele frequency (mean dosage / 2); not folded to minor.
 double subset_maf_or_nan(const Eigen::VectorXd& g, double* maf_out) {
   const int n = static_cast<int>(g.size());
   if (n <= 0) return std::numeric_limits<double>::quiet_NaN();
@@ -164,9 +165,11 @@ double subset_maf_or_nan(const Eigen::VectorXd& g, double* maf_out) {
     sum2 += g(i) * g(i);
   }
   double af = (sum / static_cast<double>(n)) / 2.0;
-  if (af > 0.5) af = 1.0 - af;
+  if (af < 0) af = 0;
+  if (af > 1) af = 1;
   if (maf_out) *maf_out = af;
-  if (af < 1e-12) return std::numeric_limits<double>::quiet_NaN();
+  const double maf = af > 0.5 ? 1.0 - af : af;
+  if (maf < 1e-12) return std::numeric_limits<double>::quiet_NaN();
   const double var = sum2 / n - (sum / n) * (sum / n);
   if (var < 1e-12) return std::numeric_limits<double>::quiet_NaN();
   return af;

@@ -16,6 +16,7 @@ namespace eqtl {
 
 VcfSession::~VcfSession() {
   if (gt_) free(gt_);
+  if (ds_) free(ds_);
   if (rec_) bcf_destroy(static_cast<bcf1_t*>(rec_));
   if (tbx_) tbx_destroy(static_cast<tbx_t*>(tbx_));
   if (idx_) hts_idx_destroy(static_cast<hts_idx_t*>(idx_));
@@ -23,8 +24,11 @@ VcfSession::~VcfSession() {
   if (fp_) hts_close(static_cast<htsFile*>(fp_));
   if (tpool_) hts_tpool_destroy(static_cast<hts_tpool*>(tpool_));
   gt_ = nullptr;
-  ngt_ = 0;
+  ds_ = nullptr;
+  ngt_ = nds_ = 0;
   rec_ = tbx_ = idx_ = hdr_ = fp_ = tpool_ = nullptr;
+  if (n_multi_skip_ > 0)
+    warn("VCF skipped multi-allelic sites: " + std::to_string(n_multi_skip_));
 }
 
 void VcfSession::set_threads(int n) {
@@ -59,6 +63,9 @@ void VcfSession::open(const std::string& path) {
   }
 
   auto* hdr = static_cast<bcf_hdr_t*>(hdr_);
+  // auto-detect FORMAT/DS (imputed dosage)
+  prefer_ds_ = (bcf_hdr_id2int(hdr, BCF_DT_ID, "DS") >= 0);
+  if (prefer_ds_) info("VCF: FORMAT/DS present → use dosage field when available");
   const int ns = bcf_hdr_nsamples(hdr);
   samples_.clear();
   samples_.reserve(ns);
@@ -138,55 +145,121 @@ std::string VcfSession::resolve_contig(const std::string& chrom) const {
   return {};
 }
 
+bool VcfSession::is_haploid_chrom(const std::string& chrom) {
+  // ponytail: treat X/Y/MT as haploid for AF denom (no PAR split)
+  std::string k = chrom;
+  if (k.size() > 3 && (k[0] == 'c' || k[0] == 'C') && (k[1] == 'h' || k[1] == 'H') &&
+      (k[2] == 'r' || k[2] == 'R'))
+    k = k.substr(3);
+  if (k == "X" || k == "x" || k == "Y" || k == "y") return true;
+  if (k == "M" || k == "m" || k == "MT" || k == "mt" || k == "Mt") return true;
+  return false;
+}
+
 bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) {
   auto* rec = static_cast<bcf1_t*>(rec_v);
   auto* hdr = static_cast<bcf_hdr_t*>(hdr_);
   if (bcf_unpack(rec, BCF_UN_STR | BCF_UN_FMT) < 0) return false;
-  if (rec->n_allele != 2) return false;
-
-  // Reuse gt_ buffer (bcf_get_genotypes reallocs as needed)
-  if (bcf_get_genotypes(hdr, rec, &gt_, &ngt_) <= 0 || !gt_) {
+  if (rec->n_allele != 2) {
+    ++n_multi_skip_;
+    if (!warned_multi_) {
+      warn("VCF multi-allelic sites skipped (biallelic only); count at close");
+      warned_multi_ = true;
+    }
     return false;
   }
+
   const int n_an = static_cast<int>(sample_col_.size());
   if (n_an == 0) return false;
   const int ns_all = bcf_hdr_nsamples(hdr);
-  if (ns_all <= 0 || ngt_ % ns_all != 0) return false;
-  const int max_pl = ngt_ / ns_all;
+  if (ns_all <= 0) return false;
   if (static_cast<int>(out.dosage.size()) != n_an) out.dosage.resize(static_cast<size_t>(n_an));
-  std::fill(out.dosage.begin(), out.dosage.end(), std::numeric_limits<double>::quiet_NaN());
+
   int n_miss = 0;
   double sum = 0.0;
   int n_ok = 0;
-  for (int i = 0; i < n_an; ++i) {
-    const int col = sample_col_[i];
-    if (col < 0 || col >= ns_all) return false;
-    const int32_t a0 = gt_[col * max_pl];
-    const int32_t a1 = (max_pl > 1) ? gt_[col * max_pl + 1] : bcf_int32_vector_end;
-    bool miss_gt = bcf_gt_is_missing(a0);
-    if (!miss_gt && max_pl > 1 && a1 != bcf_int32_vector_end && a1 != bcf_int32_missing)
-      miss_gt = bcf_gt_is_missing(a1);
-    if (miss_gt) {
-      ++n_miss;
-      continue;
+  double ploidy_sum = 0.0; // for AF: haploid chroms count 1 allele copy capacity
+
+  out.chrom = bcf_hdr_id2name(hdr, rec->rid);
+  const bool hap = is_haploid_chrom(out.chrom);
+
+  bool used_ds = false;
+  if (prefer_ds_) {
+    // bcf_get_format_float reallocs ds_
+    const int ret = bcf_get_format_float(hdr, rec, "DS", &ds_, &nds_);
+    if (ret > 0 && ds_ && nds_ >= ns_all) {
+      used_ds = true;
+      if (!warned_ds_) {
+        info("VCF: using FORMAT/DS dosages");
+        warned_ds_ = true;
+      }
+      for (int i = 0; i < n_an; ++i) {
+        const int col = sample_col_[i];
+        if (col < 0 || col >= ns_all) return false;
+        const float v = ds_[col];
+        if (bcf_float_is_missing(v) || !std::isfinite(v)) {
+          out.dosage[static_cast<size_t>(i)] = std::numeric_limits<double>::quiet_NaN();
+          ++n_miss;
+          continue;
+        }
+        // DS is expected ALT dosage in [0,2] diploid or [0,1] haploid
+        const double d = static_cast<double>(v);
+        out.dosage[static_cast<size_t>(i)] = d;
+        sum += d;
+        ploidy_sum += hap ? 1.0 : 2.0;
+        ++n_ok;
+      }
     }
-    int d = 0;
-    if (!bcf_gt_is_missing(a0) && a0 != bcf_int32_vector_end) d += bcf_gt_allele(a0);
-    if (max_pl > 1 && a1 != bcf_int32_vector_end && a1 != bcf_int32_missing && !bcf_gt_is_missing(a1))
-      d += bcf_gt_allele(a1);
-    out.dosage[static_cast<size_t>(i)] = static_cast<double>(d);
-    sum += d;
-    ++n_ok;
   }
+
+  if (!used_ds) {
+    if (bcf_get_genotypes(hdr, rec, &gt_, &ngt_) <= 0 || !gt_) return false;
+    if (ngt_ % ns_all != 0) return false;
+    const int max_pl = ngt_ / ns_all;
+    for (int i = 0; i < n_an; ++i) {
+      const int col = sample_col_[i];
+      if (col < 0 || col >= ns_all) return false;
+      const int32_t a0 = gt_[col * max_pl];
+      const int32_t a1 = (max_pl > 1) ? gt_[col * max_pl + 1] : bcf_int32_vector_end;
+      bool miss_gt = bcf_gt_is_missing(a0);
+      if (!miss_gt && max_pl > 1 && a1 != bcf_int32_vector_end && a1 != bcf_int32_missing)
+        miss_gt = bcf_gt_is_missing(a1);
+      if (miss_gt) {
+        out.dosage[static_cast<size_t>(i)] = std::numeric_limits<double>::quiet_NaN();
+        ++n_miss;
+        continue;
+      }
+      int d = 0;
+      int n_alleles = 0;
+      if (!bcf_gt_is_missing(a0) && a0 != bcf_int32_vector_end) {
+        d += bcf_gt_allele(a0);
+        ++n_alleles;
+      }
+      if (max_pl > 1 && a1 != bcf_int32_vector_end && a1 != bcf_int32_missing &&
+          !bcf_gt_is_missing(a1)) {
+        d += bcf_gt_allele(a1);
+        ++n_alleles;
+      }
+      // haploid call: only one allele present
+      const bool this_hap = hap || n_alleles == 1;
+      out.dosage[static_cast<size_t>(i)] = static_cast<double>(d);
+      sum += d;
+      ploidy_sum += this_hap ? 1.0 : 2.0;
+      ++n_ok;
+    }
+  }
+
   if (n_ok == 0) return false;
 
   const double miss_frac = static_cast<double>(n_miss) / static_cast<double>(n_an);
   if (miss_frac > miss.max_miss + 1e-15) return false;
   if (miss.hand == MissHand::Filter && miss.max_miss <= 0.0 && n_miss > 0) return false;
 
-  double maf = (sum / static_cast<double>(n_ok)) / 2.0;
-  if (maf > 0.5) maf = 1.0 - maf;
-  if (maf < 1e-12) return false;
+  // effect-allele frequency (not folded to minor)
+  double af = (ploidy_sum > 0) ? (sum / ploidy_sum) : 0.0;
+  if (af < 0) af = 0;
+  if (af > 1) af = 1;
+  if (af < 1e-12 || af > 1.0 - 1e-12) return false; // monomorphic
 
   if (n_miss > 0) {
     const double mu = sum / n_ok;
@@ -195,15 +268,15 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
         out.dosage[static_cast<size_t>(i)] = mu;
   }
 
-  out.maf = maf;
-  out.chrom = bcf_hdr_id2name(hdr, rec->rid);
+  out.af = af;
+  out.maf = af; // report effect AF in maf column (header still "maf")
   out.pos = rec->pos + 1;
   out.ref = rec->d.allele[0] ? rec->d.allele[0] : ".";
   out.alt = rec->d.allele[1] ? rec->d.allele[1] : ".";
   if (rec->d.id && rec->d.id[0] && std::strcmp(rec->d.id, ".") != 0)
     out.id = rec->d.id;
   else
-    out.id.clear(); // fill_snp_id on write path
+    out.id.clear();
   return true;
 }
 

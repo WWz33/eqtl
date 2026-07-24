@@ -297,12 +297,38 @@ int run_fission(const Options& opt) {
     Y1 = std::move(a); Y2 = std::move(b);
   }
 
+  // optional -c: residualize known covariates from Y1 before PEER
+  Eigen::MatrixXd Y_peer = Y1;
+  if (!opt.covar.empty()) {
+    CovData C = load_covar(opt.covar, P.sample_ids);
+    // OLS residualize each gene: Y = Xb + e
+    const Eigen::MatrixXd& X = C.X;
+    Eigen::MatrixXd XtX = X.transpose() * X;
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(XtX);
+    if (ldlt.info() != Eigen::Success) die("fission: covariate XtX not invertible");
+    for (int j = 0; j < G; ++j) {
+      const Eigen::VectorXd y = Y1.col(j);
+      // mean-impute NA for residualization
+      Eigen::VectorXd yy = y;
+      double mean = 0; int cnt = 0;
+      for (int i = 0; i < n; ++i)
+        if (std::isfinite(yy(i))) { mean += yy(i); ++cnt; }
+      if (cnt > 0) mean /= cnt;
+      for (int i = 0; i < n; ++i)
+        if (!std::isfinite(yy(i))) yy(i) = mean;
+      const Eigen::VectorXd b = ldlt.solve(X.transpose() * yy);
+      Y_peer.col(j) = yy - X * b;
+    }
+    info("fission: residualized " + std::to_string(C.X.cols()) +
+         " covar columns from Y1 before PEER");
+  }
+
   info("fission: estimating " + std::to_string(opt.peer_factors) +
        " PEER factors from Y1 (n=" + std::to_string(n) +
        " samples, G=" + std::to_string(G) + " genes)");
 
   const Eigen::MatrixXd factors =
-      peer_factors(Y1, opt.peer_factors, opt.fission_max_iter,
+      peer_factors(Y_peer, opt.peer_factors, opt.fission_max_iter,
                    opt.fission_tol, seed + 1u);
 
   const std::string y2_path = opt.out + ".Y2.tsv";

@@ -94,6 +94,7 @@ void print_help() {
     << "        --fast             sparse GRM approx (LMM); glm/glmm: fix null phi/sigma2\n"
     << "\n"
     << "Fission options (subcommand: eqtl fission ...):\n"
+    << "    -c, --covar FILE       residualize known covars from Y1 before PEER\n"
     << "        --peer-factors INT number of PEER factors to estimate  [10]\n"
     << "        --epsilon FLOAT    thinning fraction (0,1)  [0.5]\n"
     << "        --fission-max-iter INT  max PEER iterations  [1000]\n"

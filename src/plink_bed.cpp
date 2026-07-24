@@ -165,18 +165,22 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
       if (!std::isfinite(out.dosage[static_cast<size_t>(i)])) out.dosage[static_cast<size_t>(i)] = mu;
   }
 
-  double maf = (sum / static_cast<double>(n_ok)) / 2.0;
-  if (maf > 0.5) maf = 1.0 - maf;
-  if (maf < 1e-12) return false;
-  if (!pass_maf(maf, maf_min)) return false;
+  // effect-allele AF = mean(A1 count)/2 (diploid bed). Not folded to minor.
+  double af = (sum / static_cast<double>(n_ok)) / 2.0;
+  if (af < 0) af = 0;
+  if (af > 1) af = 1;
+  if (af < 1e-12 || af > 1.0 - 1e-12) return false;
+  if (!pass_maf(af, maf_min)) return false; // pass_maf uses min(af,1-af) internally
 
   const auto& st = sites_[snp_idx];
   out.chrom = st.chrom;
   out.pos = st.pos;
+  // effect allele = A1 → alt; other allele A2 → ref (PLINK convention, not genome REF/ALT)
   out.ref = st.a2;
   out.alt = st.a1;
   out.id = st.id;
-  out.maf = maf;
+  out.maf = af;
+  out.af = af;
   return true;
 }
 

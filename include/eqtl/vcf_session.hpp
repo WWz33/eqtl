@@ -14,8 +14,9 @@ struct SnpRec {
   std::string id;
   std::string ref;
   std::string alt;
-  std::vector<double> dosage; // n samples
-  double maf = 0;
+  std::vector<double> dosage; // n samples; effect-allele count (GT) or DS
+  double maf = 0;             // effect-allele frequency (not folded)
+  double af = 0;              // same as maf for now (effect AF)
 };
 
 struct MissPolicy {
@@ -71,11 +72,18 @@ private:
   std::vector<std::string> contigs_;
   std::vector<int> sample_col_;
   SnpRec snp_reuse_;
+  bool prefer_ds_ = false;       // auto: header has FORMAT/DS
+  bool warned_ds_ = false;
+  bool warned_multi_ = false;
+  uint64_t n_multi_skip_ = 0;
+  float* ds_ = nullptr;
+  int nds_ = 0;
 
   bool parse_record(void* rec, const MissPolicy& miss, SnpRec& out);
   void ensure_index_warn();
   bool rewind_to_data();
   std::string resolve_contig(const std::string& chrom) const;
+  static bool is_haploid_chrom(const std::string& chrom);
 };
 
 } // namespace eqtl
