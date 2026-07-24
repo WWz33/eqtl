@@ -6,197 +6,199 @@
 
 <!-- README-I18N:END -->
 
- cis/trans eQTL tools
+cis/trans eQTL mapping. Models: LM, LMM, NB-GLM, GLMM.
 
-## Getting Started
+## Install
+
+Dependencies: C++17, Eigen 3, htslib, OpenBLAS, OpenMP.
 
 ```bash
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
-
-## PLINK bfile recommended
-plink2 --vcf data/smoke.vcf.gz --make-bed --out data/smoke --allow-extra-chr
-gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
-## Estimate PEER factors
-eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
-## Run eQTL with PEER factors as covariates
-./eqtl -b data/smoke -e data/counts.tsv -c peer_factors.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis -o out
 ```
 
+## Examples
+
 ```bash
-## For VCF input, convert to BCF and index for faster I/O
+# GRM (GCTA-format; or use gcta64 --make-grm directly)
+./eqtl -b panel --make-grm -o panel_grm
+
+# fission: split counts, estimate PEER factors
+./eqtl fission -e counts.tsv --peer-factors 15 --seed 42 -o fiss
+
+# cis-LMM with PEER factors as covariates
+./eqtl -b panel -e fiss.Y2.tsv -c fiss.factors.tsv -g genes.gff \
+  -k panel_grm --model lmm --mode cis -o result
+
+# trans, multiple models
+./eqtl -b panel -e pheno.tsv -g genes.gff -k panel_grm \
+  --model lm,lmm --mode trans --perm 1000 -o result
+```
+
+VCF/BCF input (`-v`): indexed BCF recommended.
+
+```bash
 bcftools view -Ob -o panel.bcf panel.vcf.gz
 bcftools index panel.bcf
 ```
 
-## Usage
+## Options
 
-```text
+```
 eqtl [options]
 eqtl fission [options]
 ```
 
-| Flag | Default | Effect |
-|------|---------|--------|
-| `-v, --vcf` | * | exclusive with `--bfile` |
-| `-b, --bfile` | * | PLINK bfile prefix |
-| `-e, --pheno` | required* | phenotype matrix (col1=`sample`) |
-| `-g, --gff` | — | GFF3 gene features |
-| `--gff-id-key` | — | GFF attribute for gene id |
+| Flag | Default | |
+|------|---------|-|
+| `-b, --bfile` | — | PLINK bed/bim/fam prefix |
+| `-v, --vcf` | — | VCF/BCF (exclusive with `-b`) |
+| `-e, --pheno` | required | phenotype matrix |
+| `-g, --gff` | — | GFF3 gene annotation |
+| `--gff-id-key` | auto | GFF attribute for gene ID |
 | `-c, --covar` | — | covariates |
-| `-k, --grm` | — | relatedness prefix `.grm.id`/`.grm.bin` |
-| `--make-grm` | off | write relatedness matrix and exit |
-| `-m, --mode` | all | `cis` \| `trans` \| `all` \| `gw` |
-| `--model` | lmm | `lm` \| `glm` \| `lmm` \| `glmm` (comma list) |
-| `-w, --window` | 1000000 | cis window around TSS (bp) |
-| `--pval-cis` | 1e-5 | cis output p threshold |
-| `--pval-trans` | 1e-5 | trans/gw output p threshold |
-| `--miss-hand` | impute | `filter` \| `impute` |
-| `--max-miss` | 0.8 | drop SNP if missing fraction > value |
-| `--maf` | 0 | min MAF on gene-keep samples (`0`=off) |
-| `--fast` | off | LMM: sparse GRM approx; glm/glmm: fix null phi/sigma2 |
-| `--perm` | 0 | gene-level permutations (`0`=off) |
-| `--perm-trans-thr` | 1e-5 | **trans/gw** two-stage perm: stage-2 only if obs min-p < thr |
-| `--perm-trans-top` | 1000 | **trans/gw** stage-2 top-K SNPs by nominal p |
-| `--seed` | — | permutation / fission seed |
-| `--disable-beta-approx` | off | omit beta-approximated p |
-| `-o, --out` | eqtl_out | output prefix |
+| `-k, --grm` | — | GRM prefix (`.grm.id`/`.grm.bin`) |
+| `--make-grm` | off | write GRM and exit |
+| `-m, --mode` | all | `cis`/`trans`/`gw`/`all` |
+| `--model` | lmm | `lm`,`lmm`,`glm`,`glmm` (comma-separated) |
+| `-w, --window` | 1000000 | cis window ± TSS (bp) |
+| `--pval-cis` | 1e-5 | pairs threshold (cis) |
+| `--pval-trans` | 1e-5 | pairs threshold (trans/gw) |
+| `--maf` | 0 | min effect-allele frequency |
+| `--miss-hand` | impute | `filter`/`impute` |
+| `--max-miss` | 0.8 | SNP missingness cutoff |
+| `--fast` | off | sparse GRM (LMM); fixed dispersion (GLM/GLMM) |
+| `--perm` | 0 | gene-level permutations |
+| `--perm-trans-thr` | 1e-5 | trans/gw: stage-2 entry (obs min-p) |
+| `--perm-trans-top` | 1000 | trans/gw: top-K SNPs for stage-2 |
+| `--seed` | — | RNG seed |
+| `--disable-beta-approx` | off | skip beta-approx p |
 | `-t, --thread` | 1 | threads |
+| `-o, --out` | eqtl_out | output prefix |
 
-### Fission subcommand
+Fission:
 
-Split count matrix into two independent halves (binomial thinning): one for estimating PEER factors, the other for eQTL testing. Avoids double-dipping the same data for confounder correction and association.
-
-```bash
-eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
-# outputs: fiss.Y1.tsv, fiss.Y2.tsv, fiss.factors.tsv
-./eqtl -b data/panel -e fiss.Y2.tsv -c fiss.factors.tsv -g genes.gff \
-  -k grm --model lmm --mode cis -o out_fiss
-```
-
-| Flag | Default | Effect |
-|------|---------|--------|
-| `--peer-factors` | 10 | PEER factors to estimate |
+| Flag | Default | |
+|------|---------|-|
+| `--peer-factors` | 10 | number of factors |
 | `--epsilon` | 0.5 | thinning fraction (0,1) |
-| `--fission-max-iter` | 1000 | max PEER iterations |
-| `--fission-tol` | 1e-3 | PEER convergence tolerance |
+| `--fission-max-iter` | 1000 | max VB iterations |
+| `--fission-tol` | 1e-3 | convergence tolerance |
+| `-c, --covar` | — | residualize covariates from Y1 before PEER |
 
-## Input files
+## Input
 
-### Genotypes (`-v/--vcf` or `-b/--bfile`)
+### Genotype
 
-| Input | Files |
-|-------|--------|
-| `--vcf` | VCF/BCF, field **GT** |
-| `--bfile` | PLINK `.bed`/`.bim`/`.fam` |
+`-b`: PLINK bed/bim/fam. Dosage = A1 count.
+`-v`: VCF/BCF, GT field. CSI/TBI index used for region queries.
 
-| `--miss-hand` | `--max-miss` | Effect |
-|---------------|--------------|--------|
-| `filter` | `0` | any missing → drop SNP |
-| `filter` | `m>0` | drop if missing fraction > m; else mean-impute remaining |
-| `impute` | `m` | drop if fraction > m; else mean-impute |
+| `--miss-hand` | `--max-miss` | behavior |
+|---------------|--------------|----------|
+| filter | (any) | drop SNP if any sample missing |
+| impute | m | drop SNP if missingness > m; mean-impute remaining |
 
-### Phenotype (`-e/--pheno`)
+### Phenotype (`-e`)
 
-```text
+```
 sample	geneA	geneB
 S1	1.2	3.4
 S2	0.5	2.1
 ```
 
-| Rule | |
-|------|--|
-| Header | required |
-| Col1 | `sample` |
-| Other headers | gene IDs |
-| `lm` / `lmm` | continuous |
-| `glm` / `glmm` | non-negative counts |
-| Missing | `NA` / `NaN` / `.` → drop that sample for the gene |
+Col 1 = sample ID (header name ignored); remaining = genes. lm/lmm: continuous. glm/glmm: non-negative counts. `NA`/`NaN`/`.` → sample dropped for that gene.
 
-### Covariates (`-c/--covar`)
+### Covariates (`-c`)
 
-```text
+```
 sample	cov1	cov2
 S1	0	1.2
-S2	1	0.3
 ```
 
-Col1 = `sample`; other columns = covariates.
+Col 1 = sample ID; remaining = covariate columns.
 
-### Annotation (`-g/--gff`)
+### GFF (`-g`)
 
-GFF3 `gene` lines. Gene id: `ID`, else `Name` / `gene_id` (`--gff-id-key`).
+GFF3 `gene` lines. Gene ID from `ID` (fallback `Name`/`gene_id`; override: `--gff-id-key`). TSS: `+`→start, `−`→end.
 
-| Item | Definition |
-|------|------------|
-| TSS | `+` → start; `−` → end (GFF 1-based) |
-| cis | `[TSS−W, TSS+W]` (`-w`, bp) |
+### GRM (`-k`)
 
-### Relatedness (`-k/--grm`)
+GCTA format. `{prefix}.grm.id` (one sample/line), `{prefix}.grm.bin` (float32 lower-triangle incl. diagonal). Compatible with `gcta64 --make-grm` output.
 
-| File | Content |
-|------|---------|
-| `{prefix}.grm.id` | one sample per line; `FID IID` → IID, or single ID |
-| `{prefix}.grm.bin` | float32 lower triangle incl. diagonal; order = `.id` |
+## Output
 
-`--make-grm` writes both files and exits.
-
-## Output files
-
-```text
-{PREFIX}.{model}.{scope}.pairs.tsv
-{PREFIX}.{model}.{scope}.top.tsv
-{PREFIX}.{model}.{scope}.region.tsv
+```
+{prefix}.{model}.{scope}.pairs.tsv
+{prefix}.{model}.{scope}.top.tsv
+{prefix}.{model}.{scope}.region.tsv
 ```
 
-`{model}` ∈ `lm,glm,lmm,glmm`. `{scope}` ∈ `cis,trans,gw`.
+model ∈ {lm, lmm, glm, glmm}; scope ∈ {cis, trans, gw}.
 
-### `{scope}.pairs.tsv`
+### pairs
 
-Rows with `p ≤ --pval-cis` (cis) or `p ≤ --pval-trans` (trans/gw).
+SNP–gene pairs with p ≤ threshold.
 
-| Column | Meaning |
-|--------|---------|
-| `gene` | gene ID |
-| `snp` | variant ID or `chrom:pos:ref:alt` |
-| `chrom` | contig |
-| `pos` | 1-based |
-| `ref` / `alt` | alleles; beta on alt dosage |
-| `af` | effect-allele AF (gene-keep; not folded) |
-| `beta` / `se` / `stat` / `p` | association |
-| `r2` | r² |
-| `n` | sample size |
-| `tss_dist` | `pos − TSS` (bp); `NA` if no TSS |
-| `scope` | `cis` / `trans` / `gw` |
-| `phi` | NB dispersion (`glm` only) |
-| `glm_converged` / `glmm_converged` | 1/0 |
+| Column | |
+|--------|-|
+| gene | gene ID |
+| snp | variant ID or `chrom:pos:ref:alt` |
+| chrom, pos | contig, 1-based |
+| ref, alt | alleles; beta per alt dosage |
+| af | effect-allele frequency |
+| beta, se, stat, p | association |
+| r2 | partial R² |
+| n | sample size |
+| tss_dist | pos − TSS; NA if unannotated |
+| scope | cis/trans/gw |
+| phi | NB dispersion (glm only) |
+| glm_converged, glmm_converged | 1/0 |
 
-### `{scope}.top.tsv`
+### top
 
-Same columns as pairs. ≤1 row per gene (lowest p among threshold-passing SNPs).
+Same columns. ≤1 row per gene (best SNP passing threshold).
 
-### `{scope}.region.tsv`
+### region
 
-| Column | Meaning |
-|--------|---------|
-| `gene` | gene ID |
-| `chrom` | contig |
-| `tss` | TSS |
-| `n_tested` | SNPs tested |
-| `n_sig` | SNPs in pairs |
-| `acat_p` | ACAT of SNP p-values |
-| `q_bh` | BH-adjusted acat_p across genes |
-| `p_emp` | empirical gene p; `NA` if `--perm 0` |
-| `p_beta` | beta-approximated gene p; `NA` if off |
-| `beta_shape1` / `beta_shape2` | beta fit |
+One row per gene.
 
-### `--make-grm`
+| Column | |
+|--------|-|
+| gene, chrom, tss | |
+| n_tested | SNPs tested |
+| n_sig | SNPs in pairs |
+| acat_p | ACAT over SNP p-values |
+| q_bh | BH across genes |
+| p_emp | empirical gene p (NA if `--perm 0`) |
+| p_beta | beta-approx gene p |
+| beta_shape1, beta_shape2 | beta fit |
 
-GCTA-compatible relatedness matrix. You can also use GRM computed directly by GCTA.
+## Fission
+
+`eqtl fission` splits a count/expression matrix into two conditionally independent halves, estimates PEER factors on one half, and outputs the other half for downstream eQTL testing. This avoids using the same data for both confounder estimation and association (double-dipping).
+
+Splitting:
+
+- Integer counts → binomial thinning: Y1[i,d] ~ Binom(Y[i,d], ε), Y2 = Y − Y1. Y1 ⊥ Y2 | λ by Poisson splitting.
+- Non-count (continuous) → Gaussian fission: Y1 = εY + Z, Y2 = (1−ε)Y − Z, Z ~ N(0, σ²ε(1−ε)) per gene. Y1 ⊥ Y2 | μ.
+
+PEER (Stegle et al. 2012): variational Bayes factor analysis with ARD priors, run on Y1. If `-c` given, known covariates are residualized from Y1 first (Y2 untouched).
+
+Output: `{prefix}.Y1.tsv`, `{prefix}.Y2.tsv` (use as `-e`), `{prefix}.factors.tsv` (use as `-c`). All TSV files have `sample_id` as the first column header.
+
+```bash
+./eqtl fission -e counts.tsv --peer-factors 15 --epsilon 0.5 --seed 42 -o fiss
+./eqtl -b panel -e fiss.Y2.tsv -c fiss.factors.tsv -g genes.gff \
+  -k panel_grm --model lmm --mode cis -o result
+```
+
+## Permutation
+
+`--perm B`: gene-level min-p permutation.
+
+- **cis**: exact. All cis-window SNP dosages cached; residuals shuffled B times (Freedman–Lane for LM; GLS residuals for LMM). p_emp = (1 + #{T_perm ≥ T_obs}) / (B+1).
+- **trans/gw**: two-stage (FastQTL-style). Stage 1: full nominal scan, retain top-K SNPs per gene. Stage 2: permute and re-test top-K only for genes with obs min-p < `--perm-trans-thr`. Conservative relative to full-SNP permutation.
 
 ## License
 
 MIT
-
-**Note (trans/gw + `--perm`):** On the SNP-outer path, `p_emp`/`p_beta` use a FastQTL-style two-stage approximation—full nominal scan, then min-p permutations on top-K SNPs only; conservative vs full-SNP exact perm. cis still uses exact full-window dosage perm.
