@@ -44,6 +44,13 @@ struct Options {
   bool help = false;
   bool version = false;
 
+  // fission subcommand
+  bool   run_fission    = false;
+  int    peer_factors   = 10;
+  double fission_epsilon = 0.5;
+  int    fission_max_iter = 1000;
+  double fission_tol    = 1e-3;
+
   bool use_bfile() const { return !bfile.empty(); }
 };
 

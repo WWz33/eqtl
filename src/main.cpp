@@ -1,4 +1,5 @@
 #include "eqtl/options.hpp"
+#include "eqtl/fission.hpp"
 #include "eqtl/scan.hpp"
 #include "eqtl/util.hpp"
 
@@ -12,9 +13,8 @@ int main(int argc, char** argv) {
     return 1;
   }
   try {
-    if (opt.make_grm) {
-      return eqtl::run_make_grm(opt);
-    }
+    if (opt.run_fission) return eqtl::run_fission(opt);
+    if (opt.make_grm) return eqtl::run_make_grm(opt);
     return eqtl::run_eqtl(opt);
   } catch (const std::exception& ex) {
     eqtl::die(std::string("exception: ") + ex.what());

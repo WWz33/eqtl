@@ -70,6 +70,7 @@ void print_help() {
     << "Version: 0.1.0\n"
     << "\n"
     << "Usage:   eqtl [options]\n"
+    << "         eqtl fission [options]   # data fission + PEER factor estimation\n"
     << "\n"
     << "Input options:\n"
     << "    -v, --vcf FILE         genotypes VCF/BCF (GT)\n"
@@ -92,9 +93,15 @@ void print_help() {
     << "        --maf FLOAT        min MAF on analysis samples  [0=off]\n"
     << "        --fast             sparse GRM approx (LMM); glm/glmm: fix null phi/sigma2\n"
     << "\n"
+    << "Fission options (subcommand: eqtl fission ...):\n"
+    << "        --peer-factors INT number of PEER factors to estimate  [10]\n"
+    << "        --epsilon FLOAT    thinning fraction (0,1)  [0.5]\n"
+    << "        --fission-max-iter INT  max PEER iterations  [1000]\n"
+    << "        --fission-tol FLOAT     PEER convergence tolerance  [1e-3]\n"
+    << "\n"
     << "Permutation options:\n"
     << "        --perm INT         gene-level permutations  [0=off]\n"
-    << "        --seed INT         permutation seed\n"
+    << "        --seed INT         permutation / fission seed\n"
     << "        --disable-beta-approx  omit beta-approximated p\n"
     << "\n"
     << "Output options:\n"
@@ -107,13 +114,21 @@ void print_help() {
     << "    eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff --model lm --mode cis --perm 0 -o out\n"
     << "    eqtl -b data/smoke -e data/smoke.pheno.tsv -g data/smoke.gff --model lm --mode cis --perm 0 --maf 0.05 -o out\n"
     << "    eqtl -v data/smoke.vcf.gz --make-grm -o data/smoke\n"
-    << "    eqtl -b data/smoke --make-grm -o data/smoke_from_bed\n";
+    << "    eqtl -b data/smoke --make-grm -o data/smoke_from_bed\n"
+    << "    eqtl fission -e data/pheno.tsv --peer-factors 15 --epsilon 0.5 --seed 42 -o fission_out\n";
 }
 
 int parse_options(int argc, char** argv, Options& opt) {
   if (argc == 1) {
     print_help();
     return 2;
+  }
+
+  // subcommand detection: eqtl fission [...]
+  int start_optind = 1;
+  if (argc >= 2 && std::string(argv[1]) == "fission") {
+    opt.run_fission = true;
+    start_optind = 2;
   }
 
   static struct option long_opts[] = {
@@ -143,10 +158,15 @@ int parse_options(int argc, char** argv, Options& opt) {
       {"disable-beta-approx", no_argument, 0, 1010},
       {"help", no_argument, 0, 'h'},
       {"version", no_argument, 0, 1011},
+      {"peer-factors", required_argument, 0, 1014},
+      {"epsilon", required_argument, 0, 1015},
+      {"fission-max-iter", required_argument, 0, 1016},
+      {"fission-tol", required_argument, 0, 1017},
       {0, 0, 0, 0}};
 
   int c;
   int idx;
+  optind = start_optind;  // skip "fission" token if present
   while ((c = getopt_long(argc, argv, "v:b:e:o:g:c:k:m:w:t:h", long_opts, &idx)) != -1) {
     switch (c) {
       case 'v': opt.vcf = optarg; break;
@@ -183,6 +203,23 @@ int parse_options(int argc, char** argv, Options& opt) {
         opt.maf = std::atof(optarg);
         if (opt.maf < 0.0 || opt.maf > 0.5) die("--maf must be in [0,0.5]");
         break;
+      case 1014:
+        opt.peer_factors = std::atoi(optarg);
+        if (opt.peer_factors < 1) die("--peer-factors must be >= 1");
+        break;
+      case 1015:
+        opt.fission_epsilon = std::atof(optarg);
+        if (opt.fission_epsilon <= 0.0 || opt.fission_epsilon >= 1.0)
+          die("--epsilon must be in (0,1)");
+        break;
+      case 1016:
+        opt.fission_max_iter = std::atoi(optarg);
+        if (opt.fission_max_iter < 1) die("--fission-max-iter must be >= 1");
+        break;
+      case 1017:
+        opt.fission_tol = std::atof(optarg);
+        if (opt.fission_tol <= 0.0) die("--fission-tol must be > 0");
+        break;
       default:
         return 1;
     }
@@ -197,8 +234,15 @@ int parse_options(int argc, char** argv, Options& opt) {
     return 2;
   }
 
+  if (opt.run_fission) {
+    if (opt.pheno.empty()) {
+      std::cerr << "[E] fission requires -e/--pheno\n";
+      return 1;
+    }
+    return 0;
+  }
+
   if (opt.vcf.empty() == opt.bfile.empty()) {
-    // both empty or both set
     if (opt.vcf.empty() && opt.bfile.empty()) {
       std::cerr << "[E] need exactly one of -v/--vcf or -b/--bfile\n";
     } else {
