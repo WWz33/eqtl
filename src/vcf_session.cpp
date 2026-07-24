@@ -261,6 +261,7 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   if (af > 1) af = 1;
   if (af < 1e-12 || af > 1.0 - 1e-12) return false; // monomorphic
 
+  if (miss.hand == MissHand::Filter && n_miss > 0) return false;
   if (n_miss > 0 && miss.hand == MissHand::Impute) {
     const double mu = sum / n_ok;
     for (int i = 0; i < n_an; ++i)

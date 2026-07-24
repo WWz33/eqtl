@@ -143,8 +143,8 @@ void PlinkBed::set_sample_order(const std::vector<std::string>& sample_ids) {
 
 bool PlinkBed::seek_snp(size_t snp_idx) {
   if (!bed_fp_) return false;
-  const long off = static_cast<long>(3 + snp_idx * bytes_per_snp_);
-  return std::fseek(bed_fp_, off, SEEK_SET) == 0;
+  const off_t off = static_cast<off_t>(3 + snp_idx * bytes_per_snp_);
+  return fseeko(bed_fp_, off, SEEK_SET) == 0;
 }
 
 bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& miss, double maf_min,
@@ -177,10 +177,9 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
 
   const double miss_frac = static_cast<double>(n_miss) / static_cast<double>(n_an);
   if (miss_frac > miss.max_miss + 1e-15) return false;
-  if (miss.hand == MissHand::Filter && n_miss > 0) {
-    // filter: keep SNP only if miss_frac <= max_miss; never impute (analysis subset drops NA)
-    // dosage stays NaN for missing samples
-  } else if (n_miss > 0 && miss.hand == MissHand::Impute) {
+  // filter: any remaining missing → drop SNP (complete-case; no silent NaN into LM)
+  if (miss.hand == MissHand::Filter && n_miss > 0) return false;
+  if (n_miss > 0 && miss.hand == MissHand::Impute) {
     const double mu = sum / n_ok;
     for (int i = 0; i < n_an; ++i)
       if (!std::isfinite(out.dosage[static_cast<size_t>(i)])) out.dosage[static_cast<size_t>(i)] = mu;

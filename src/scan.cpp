@@ -985,7 +985,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         summaries.reserve(jobs.size());
         for (auto& j : jobs) summaries.push_back(std::move(j.summary));
       } else {
-        // shared GRM eigen once for complete-sample LMM (same keep for all genes)
+        // shared GRM eigen once; only use when y has no NA (else build_gene_ready per gene)
         LmmBasis grm_basis;
         bool have_grm_basis = false;
         if (need_lmm_basis && Kptr && Kptr->rows() == static_cast<int>(ph.sample_ids.size())) {
@@ -996,19 +996,12 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           info("LMM: shared GRM eigen-decomp (n=" + std::to_string(Kptr->rows()) + ")");
         }
 
-        // cis: gene-level OpenMP (independent regions); writers use critical
-        const bool omp_genes = (scope == "cis" && opt.threads > 1);
-        const int n_genes = static_cast<int>(ph.gene_ids.size());
-        std::vector<GeneSummary> local_sum(static_cast<size_t>(n_genes));
-        std::vector<char> local_ok(static_cast<size_t>(n_genes), 0);
-
-#pragma omp parallel for schedule(dynamic) if (omp_genes) num_threads(opt.threads)
-        for (int gi = 0; gi < n_genes; ++gi) {
-          const std::string& gene = ph.gene_ids[static_cast<size_t>(gi)];
-          Eigen::VectorXd y = ph.Y.col(gi);
+        // ponytail: no gene-level OMP — single FILE* bed + interleaved I/O; parallelize later per-thread bed
+        for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
+          const std::string& gene = ph.gene_ids[gi];
+          Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
 
           if (needs_counts(model) && !looks_like_counts(y)) {
-#pragma omp critical(eqtl_warn)
             warn("skip non-count gene for " + model_str(model) + ": " + gene);
             continue;
           }
@@ -1026,8 +1019,11 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           }
 
           GeneReady gr;
-          if (have_grm_basis) {
-            // full samples, no NA filter → shared basis
+          bool y_has_na = false;
+          for (int i = 0; i < y.size(); ++i) {
+            if (!std::isfinite(y(i))) { y_has_na = true; break; }
+          }
+          if (have_grm_basis && !y_has_na) {
             gr.keep.resize(static_cast<size_t>(y.size()));
             std::iota(gr.keep.begin(), gr.keep.end(), 0);
             gr.y = y;
@@ -1038,33 +1034,22 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
             if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
           }
 
-          GeneSummary summary;
+          summaries.emplace_back();
+          GeneSummary& summary = summaries.back();
 
           if (scope == "cis") {
-            if (!locp) continue;
+            if (!locp) { summaries.pop_back(); continue; }
             const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
             const int64_t cend = locp->tss + opt.window;
             auto stream = [&](auto&& take) {
-              // bed region scans are not thread-safe on single FILE* — serialize I/O
-#pragma omp critical(eqtl_geno)
               geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
                 take(s);
                 return true;
               });
             };
-            // scan_gene_snps writes pairs; wrap by temporarily serializing write_pair_line via critical in apply
-            // For simplicity call under critical for whole gene when omp
-            if (omp_genes) {
-#pragma omp critical(eqtl_gene_scan)
-              scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
-            } else {
-              scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
-            }
-            local_sum[static_cast<size_t>(gi)] = std::move(summary);
-            local_ok[static_cast<size_t>(gi)] = 1;
-            continue;
+            scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
           } else if (scope == "trans") {
-            if (!locp) continue;
+            if (!locp) { summaries.pop_back(); continue; }
             auto stream = [&](auto&& take) {
               geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
                 if (in_cis_window(s, *locp, opt.window)) return true;
@@ -1082,12 +1067,6 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
             };
             scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
           }
-          local_sum[static_cast<size_t>(gi)] = std::move(summary);
-          local_ok[static_cast<size_t>(gi)] = 1;
-        }
-        for (int gi = 0; gi < n_genes; ++gi) {
-          if (local_ok[static_cast<size_t>(gi)])
-            summaries.push_back(std::move(local_sum[static_cast<size_t>(gi)]));
         }
       }
       bh_adjust(summaries);
