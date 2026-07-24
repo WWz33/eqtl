@@ -27,15 +27,10 @@ gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 ```
 
 ```bash
-## Use PEER factors as covariates (external PEER or built-in fission)
-# option A: built-in fission (splits counts, estimates PEER, outputs Y2 + factors)
+## Estimate PEER factors and run eQTL with covariates
 eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
 ./eqtl -b data/smoke -e fiss.Y2.tsv -c fiss.factors.tsv -g data/smoke.gff \
   -k data/smoke_grm --model lmm --mode cis -o out_fiss
-
-# option B: external PEER factors file as covariates
-./eqtl -b data/smoke -e data/smoke.pheno.tsv -c peer_factors.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis -o out_peer
 ```
 
 ```bash
