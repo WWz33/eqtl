@@ -161,7 +161,7 @@ Rows with `p ≤ --pval-cis` (cis) or `p ≤ --pval-trans` (trans/gw).
 | `chrom` | contig |
 | `pos` | 1-based |
 | `ref` / `alt` | alleles; beta on alt dosage |
-| `maf` | MAF (on gene-keep samples) |
+| `af` | effect-allele AF (gene-keep; not folded) |
 | `beta` / `se` / `stat` / `p` | association |
 | `r2` | r² |
 | `n` | sample size |

@@ -180,7 +180,6 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
   out.alt = st.a1;
   out.id = st.id;
   out.maf = af;
-  out.af = af;
   return true;
 }
 

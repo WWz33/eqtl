@@ -146,7 +146,7 @@ std::string VcfSession::resolve_contig(const std::string& chrom) const {
 }
 
 bool VcfSession::is_haploid_chrom(const std::string& chrom) {
-  // ponytail: treat X/Y/MT as haploid for AF denom (no PAR split)
+  // ponytail: whole X/Y/MT as haploid AF denom; PAR (~2.6Mb) stays diploid in reality — skip PAR map
   std::string k = chrom;
   if (k.size() > 3 && (k[0] == 'c' || k[0] == 'C') && (k[1] == 'h' || k[1] == 'H') &&
       (k[2] == 'r' || k[2] == 'R'))
@@ -268,8 +268,7 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
         out.dosage[static_cast<size_t>(i)] = mu;
   }
 
-  out.af = af;
-  out.maf = af; // report effect AF in maf column (header still "maf")
+  out.maf = af; // effect AF (output column "af")
   out.pos = rec->pos + 1;
   out.ref = rec->d.allele[0] ? rec->d.allele[0] : ".";
   out.alt = rec->d.allele[1] ? rec->d.allele[1] : ".";

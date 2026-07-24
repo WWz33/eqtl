@@ -297,24 +297,62 @@ int run_fission(const Options& opt) {
     Y1 = std::move(a); Y2 = std::move(b);
   }
 
-  // optional -c: residualize known covariates from Y1 before PEER
+  // optional -c: intersect samples (pheno ∩ covar), residualize Y1, then PEER
   Eigen::MatrixXd Y_peer = Y1;
   if (!opt.covar.empty()) {
+    // read covar sample ids only
+    std::ifstream cin(opt.covar);
+    if (!cin) die("cannot open covar: " + opt.covar);
+    std::vector<std::string> cov_ids;
+    std::string line;
+    bool first = true;
+    while (std::getline(cin, line)) {
+      line = trim(line);
+      if (line.empty() || line[0] == '#') continue;
+      auto tok = split_ws(line);
+      if (tok.size() < 2) continue;
+      if (first) {
+        first = false;
+        char* end = nullptr;
+        std::strtod(tok[1].c_str(), &end);
+        if (!(end && *end == '\0')) continue; // header
+      }
+      cov_ids.push_back(tok[0]);
+    }
+    const int n_before = static_cast<int>(P.sample_ids.size());
+    auto keep = intersect_order(P.sample_ids, cov_ids);
+    if (keep.empty()) die("fission: no overlapping samples between pheno and covar");
+    if (static_cast<int>(keep.size()) < n_before) {
+      info("fission: using " + std::to_string(keep.size()) + " samples (dropped " +
+           std::to_string(n_before - static_cast<int>(keep.size())) + " not in covar)");
+    }
+    // row index map from original P order
+    auto pmap = index_map(P.sample_ids);
+    std::vector<int> rows;
+    rows.reserve(keep.size());
+    for (const auto& id : keep) rows.push_back(pmap[id]);
+    auto slice_rows = [&](Eigen::MatrixXd& M) {
+      Eigen::MatrixXd N(static_cast<int>(rows.size()), M.cols());
+      for (size_t r = 0; r < rows.size(); ++r) N.row(static_cast<int>(r)) = M.row(rows[r]);
+      M.swap(N);
+    };
+    slice_rows(Y1);
+    slice_rows(Y2);
+    slice_pheno(P, keep);
+    const int n2 = static_cast<int>(P.sample_ids.size());
     CovData C = load_covar(opt.covar, P.sample_ids);
-    // OLS residualize each gene: Y = Xb + e
     const Eigen::MatrixXd& X = C.X;
     Eigen::MatrixXd XtX = X.transpose() * X;
     Eigen::LDLT<Eigen::MatrixXd> ldlt(XtX);
     if (ldlt.info() != Eigen::Success) die("fission: covariate XtX not invertible");
+    Y_peer.resize(n2, G);
     for (int j = 0; j < G; ++j) {
-      const Eigen::VectorXd y = Y1.col(j);
-      // mean-impute NA for residualization
-      Eigen::VectorXd yy = y;
+      Eigen::VectorXd yy = Y1.col(j);
       double mean = 0; int cnt = 0;
-      for (int i = 0; i < n; ++i)
+      for (int i = 0; i < n2; ++i)
         if (std::isfinite(yy(i))) { mean += yy(i); ++cnt; }
       if (cnt > 0) mean /= cnt;
-      for (int i = 0; i < n; ++i)
+      for (int i = 0; i < n2; ++i)
         if (!std::isfinite(yy(i))) yy(i) = mean;
       const Eigen::VectorXd b = ldlt.solve(X.transpose() * yy);
       Y_peer.col(j) = yy - X * b;
@@ -323,8 +361,12 @@ int run_fission(const Options& opt) {
          " covar columns from Y1 before PEER");
   }
 
+  const int n_use = static_cast<int>(P.sample_ids.size());
+  if (opt.peer_factors >= n_use || opt.peer_factors >= G)
+    die("--peer-factors must be < min(n_samples, n_genes) after sample filter");
+
   info("fission: estimating " + std::to_string(opt.peer_factors) +
-       " PEER factors from Y1 (n=" + std::to_string(n) +
+       " PEER factors from Y1 (n=" + std::to_string(n_use) +
        " samples, G=" + std::to_string(G) + " genes)");
 
   const Eigen::MatrixXd factors =

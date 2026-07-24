@@ -6,7 +6,7 @@
 namespace eqtl {
 
 void write_pairs_header(std::ostream& os, Model m) {
-  os << "gene\tsnp\tchrom\tpos\tref\talt\tmaf\tbeta\tse\tstat\tp\tr2\tn\ttss_dist\tscope";
+  os << "gene\tsnp\tchrom\tpos\tref\talt\taf\tbeta\tse\tstat\tp\tr2\tn\ttss_dist\tscope";
   if (m == Model::Glm) os << "\tphi\tglm_converged";
   if (m == Model::Glmm) os << "\tglmm_converged";
   os << '\n';

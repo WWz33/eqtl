@@ -161,7 +161,7 @@ GFF3 `gene` 行。基因 ID：`ID`，否则 `Name` / `gene_id`（`--gff-id-key`�
 | `chrom` | contig |
 | `pos` | 1-based |
 | `ref` / `alt` | 等位基因；beta 对应 alt 剂量 |
-| `maf` | MAF（基因 keep 样本） |
+| `af` | effect 等位基因频率（基因 keep；不折到 minor） |
 | `beta` / `se` / `stat` / `p` | 关联 |
 | `r2` | r² |
 | `n` | 样本量 |

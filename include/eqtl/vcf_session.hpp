@@ -15,8 +15,7 @@ struct SnpRec {
   std::string ref;
   std::string alt;
   std::vector<double> dosage; // n samples; effect-allele count (GT) or DS
-  double maf = 0;             // effect-allele frequency (not folded)
-  double af = 0;              // same as maf for now (effect AF)
+  double maf = 0;             // effect-allele frequency (column name: af in output)
 };
 
 struct MissPolicy {
