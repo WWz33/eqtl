@@ -35,6 +35,7 @@ bcftools index panel.bcf
 
 ```text
 eqtl [options]
+eqtl fission [options]
 ```
 
 | Flag | Default | Effect |
@@ -54,13 +55,22 @@ eqtl [options]
 | `--pval-trans` | 1e-5 | trans/gw output p threshold |
 | `--miss-hand` | filter | `filter` \| `impute` |
 | `--max-miss` | 0 | drop SNP if missing fraction > value |
-| `--maf` | 0 | min MAF (`0`=off) |
+| `--maf` | 0 | min MAF on gene-keep samples (`0`=off) |
 | `--fast` | off | LMM: sparse GRM approx; glm/glmm: fix null phi/sigma2 |
 | `--perm` | 0 | gene-level permutations (`0`=off) |
-| `--seed` | — | permutation seed |
+| `--seed` | — | permutation / fission seed |
 | `--disable-beta-approx` | off | omit beta-approximated p |
 | `-o, --out` | eqtl_out | output prefix |
 | `-t, --thread` | 1 | threads |
+
+### Fission subcommand
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--peer-factors` | 10 | PEER factors to estimate |
+| `--epsilon` | 0.5 | thinning fraction (0,1) |
+| `--fission-max-iter` | 1000 | max PEER iterations |
+| `--fission-tol` | 1e-3 | PEER convergence tolerance |
 
 \* exactly one of `--vcf` or `--bfile`; pheno not required with `--make-grm`
 
@@ -151,7 +161,7 @@ Rows with `p ≤ --pval-cis` (cis) or `p ≤ --pval-trans` (trans/gw).
 | `chrom` | contig |
 | `pos` | 1-based |
 | `ref` / `alt` | alleles; beta on alt dosage |
-| `maf` | MAF |
+| `maf` | MAF (on gene-keep samples) |
 | `beta` / `se` / `stat` / `p` | association |
 | `r2` | r² |
 | `n` | sample size |
@@ -174,6 +184,7 @@ Same columns as pairs. ≤1 row per gene (lowest p among threshold-passing SNPs)
 | `n_tested` | SNPs tested |
 | `n_sig` | SNPs in pairs |
 | `acat_p` | ACAT of SNP p-values |
+| `q_bh` | BH-adjusted acat_p across genes |
 | `p_emp` | empirical gene p; `NA` if `--perm 0` |
 | `p_beta` | beta-approximated gene p; `NA` if off |
 | `beta_shape1` / `beta_shape2` | beta fit |
