@@ -580,7 +580,7 @@ struct GeneLmmJob {
 struct LmmTestWs {
   Eigen::MatrixXd Xg;
   Eigen::MatrixXd XtDX;
-  Eigen::VectorXd XtDy, beta, e, cov_col, fit, resid, yc;
+  Eigen::VectorXd XtDy, beta, e, cov_col;
 };
 
 // Wald on spectral space with precomputed g_til (same math as test_lmm)
@@ -614,21 +614,15 @@ static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_
   double q = prep.y_til.dot(dinv.asDiagonal() * prep.y_til) - ws.XtDy.dot(ws.beta);
   if (q < 0) q = 0;
   const double sigma2 = (df > 0) ? (q / df) : 1.0;
-  if (ws.e.size() != p1) ws.e = Eigen::VectorXd::Zero(p1);
-  else ws.e.setZero();
+  if (ws.e.size() != p1) ws.e.resize(p1);
+  ws.e.setZero();
   ws.e(prep.p) = 1.0;
   ws.cov_col = ldlt.solve(ws.e);
   h.se = std::sqrt(std::max(sigma2 * ws.cov_col(prep.p), 0.0));
   h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
   h.p = p_from_t(h.stat, df);
-  // match test_lmm weighted residual r²
-  ws.fit.noalias() = ws.Xg * ws.beta;
-  ws.resid = prep.y_til - ws.fit;
-  const double wss_res = ws.resid.dot(dinv.asDiagonal() * ws.resid);
-  const double ymean = (dinv.dot(prep.y_til)) / dinv.sum();
-  ws.yc = prep.y_til.array() - ymean;
-  const double wss_tot = ws.yc.dot(dinv.asDiagonal() * ws.yc);
-  h.r2 = (wss_tot > 1e-15) ? std::max(0.0, 1.0 - wss_res / wss_tot) : 0.0;
+  // partial R² (same as test_lmm)
+  h.r2 = (prep.rss_null > 1e-15) ? std::max(0.0, 1.0 - q / prep.rss_null) : 0.0;
   return h;
 }
 
@@ -703,15 +697,33 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     // Q only needed for g_til; free after scan
     jobs[0].prep.Q.resize(0, 0);
   } else {
-    // one I/O; per-gene Q retained (heterogeneous keep)
+    // one I/O; per-gene Q; reuse g_buf + g_til + LmmTestWs (no per-call Eigen alloc)
+    size_t maxk = 0;
+    for (const auto& j : jobs) maxk = std::max(maxk, j.gr.keep.size());
+    g_buf.resize(static_cast<int>(maxk));
+    g_til.resize(static_cast<int>(maxk));
     geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
       for (auto& job : jobs) {
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
-        Eigen::VectorXd g = subset_dosage(snp.dosage, job.gr.keep);
+        const int nk = static_cast<int>(job.gr.keep.size());
+        if (g_buf.size() < nk) g_buf.resize(nk);
+        for (int r = 0; r < nk; ++r) {
+          const int i = job.gr.keep[static_cast<size_t>(r)];
+          g_buf(r) = (i >= 0 && static_cast<size_t>(i) < snp.dosage.size())
+                         ? snp.dosage[static_cast<size_t>(i)]
+                         : std::numeric_limits<double>::quiet_NaN();
+        }
         double maf_sub = snp.maf;
-        if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) continue;
-        AssocHit h = test_lmm(job.prep, g);
-        h.maf = maf_sub;
+        if (!std::isfinite(subset_maf_or_nan(
+                Eigen::Map<const Eigen::VectorXd>(g_buf.data(), nk), &maf_sub)))
+          continue;
+        if (g_til.size() != nk) g_til.resize(nk);
+        // g_til = Q' * g without temporary Map lifetime issues
+        {
+          Eigen::Map<const Eigen::VectorXd> g(g_buf.data(), nk);
+          g_til.noalias() = job.prep.Q.transpose() * g;
+        }
+        AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws);
         apply_snp_hit(job, h, snp, pthr, Model::Lmm, out);
       }
       return true;

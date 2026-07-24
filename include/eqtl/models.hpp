@@ -55,6 +55,7 @@ struct GenePrepLmm {
   Eigen::MatrixXd Q;
   Eigen::VectorXd dinv; // 1/(delta*lambda+1), null-fixed
   double delta = 1;
+  double rss_null = 0; // weighted null RSS (covariates only) → partial R² denom
   int n = 0;
   int p = 0;
 };

@@ -113,6 +113,19 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const L
   p.X_til = p.Q.transpose() * X;
   p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
   fill_dinv(p);
+  // null weighted RSS (X only) for partial R²
+  {
+    Eigen::MatrixXd XtDX0 = p.X_til.transpose() * p.dinv.asDiagonal() * p.X_til;
+    Eigen::VectorXd XtDy0 = p.X_til.transpose() * (p.dinv.asDiagonal() * p.y_til);
+    Eigen::LDLT<Eigen::MatrixXd> ldlt0(XtDX0);
+    if (ldlt0.info() == Eigen::Success) {
+      const Eigen::VectorXd b0 = ldlt0.solve(XtDy0);
+      p.rss_null = p.y_til.dot(p.dinv.asDiagonal() * p.y_til) - XtDy0.dot(b0);
+      if (p.rss_null < 0) p.rss_null = 0;
+    } else {
+      p.rss_null = p.y_til.dot(p.dinv.asDiagonal() * p.y_til);
+    }
+  }
   return p;
 }
 
@@ -156,14 +169,8 @@ AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   h.se = std::sqrt(std::max(sigma2 * cov_col(prep.p), 0.0));
   h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
   h.p = p_from_t(h.stat, df);
-  // weighted residual r² in spectral space (same weights as GLS)
-  const Eigen::VectorXd fit = Xg * beta;
-  const Eigen::VectorXd resid = prep.y_til - fit;
-  const double wss_res = resid.dot(dinv.asDiagonal() * resid);
-  const double ymean = (dinv.dot(prep.y_til)) / dinv.sum();
-  const Eigen::VectorXd yc = prep.y_til.array() - ymean;
-  const double wss_tot = yc.dot(dinv.asDiagonal() * yc);
-  h.r2 = (wss_tot > 1e-15) ? std::max(0.0, 1.0 - wss_res / wss_tot) : 0.0;
+  // partial R²: 1 - RSS_full / RSS_null (null = covariates only; matches LM y_s style)
+  h.r2 = (prep.rss_null > 1e-15) ? std::max(0.0, 1.0 - q / prep.rss_null) : 0.0;
   return h;
 }
 
