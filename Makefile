@@ -60,6 +60,7 @@ SRC := \
   src/model_glm.cpp \
   src/model_glmm.cpp \
   src/stats_extra.cpp \
+  src/fission.cpp \
   src/scan.cpp \
   src/output.cpp
 
