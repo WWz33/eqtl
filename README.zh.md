@@ -57,6 +57,8 @@ eqtl fission [options]
 | `--maf` | 0 | 基因 keep 样本上最小 MAF（`0`=关） |
 | `--fast` | 关 | LMM：GRM 稀疏近似；glm/glmm：固定 null phi/sigma2 |
 | `--perm` | 0 | 基因级置换（`0`=关） |
+| `--perm-trans-thr` | 1e-5 | **trans/gw** 两阶段置换：obs min-p < thr 的基因才做 stage-2 |
+| `--perm-trans-top` | 1000 | **trans/gw** stage-2 每基因保留的 nominal top-K SNP |
 | `--seed` | — | 置换/fission 种子 |
 | `--disable-beta-approx` | 关 | 不写 beta 近似 p |
 | `-o, --out` | eqtl_out | 输出前缀 |
@@ -196,3 +198,5 @@ GFF3 `gene` 行。基因 ID：`ID`，否则 `Name` / `gene_id`（`--gff-id-key`�
 ## License
 
 MIT
+
+**注意（trans/gw + `--perm`）：** SNP-outer 路径上 `p_emp`/`p_beta` 为 FastQTL 式两阶段近似——stage-1 全量 nominal，stage-2 仅在 top-K SNP 上置换 min-p；结果偏保守，非全 SNP 精确置换。cis 路径仍为全量 dosage 精确置换。

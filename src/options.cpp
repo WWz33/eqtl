@@ -102,6 +102,8 @@ void print_help() {
     << "\n"
     << "Permutation options:\n"
     << "        --perm INT         gene-level permutations  [0=off]\n"
+    << "        --perm-trans-thr FLOAT  trans/gw: stage-2 if obs min-p < thr  [1e-5]\n"
+    << "        --perm-trans-top INT    trans/gw: top-K SNPs for stage-2 perm  [1000]\n"
     << "        --seed INT         permutation / fission seed\n"
     << "        --disable-beta-approx  omit beta-approximated p\n"
     << "\n"
@@ -155,6 +157,8 @@ int parse_options(int argc, char** argv, Options& opt) {
       {"threads", required_argument, 0, 't'},
       {"perm", required_argument, 0, 1008},
       {"permutations", required_argument, 0, 1008},
+      {"perm-trans-thr", required_argument, 0, 1020},
+      {"perm-trans-top", required_argument, 0, 1021},
       {"seed", required_argument, 0, 1009},
       {"disable-beta-approx", no_argument, 0, 1010},
       {"help", no_argument, 0, 'h'},
@@ -193,6 +197,15 @@ int parse_options(int argc, char** argv, Options& opt) {
         break;
       case 1007: opt.fast = true; break;
       case 1008: opt.perm = std::atoi(optarg); break;
+      case 1020:
+        opt.perm_trans_thr = std::atof(optarg);
+        if (opt.perm_trans_thr <= 0 || opt.perm_trans_thr > 1)
+          die("--perm-trans-thr must be in (0,1]");
+        break;
+      case 1021:
+        opt.perm_trans_top = std::atoi(optarg);
+        if (opt.perm_trans_top < 1) die("--perm-trans-top must be >= 1");
+        break;
       case 1009: opt.seed = std::atoi(optarg); break;
       case 1010: opt.disable_beta_approx = true; break;
       case 1011: opt.version = true; break;

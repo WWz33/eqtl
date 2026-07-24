@@ -451,7 +451,29 @@ struct GeneLmJob {
   GeneSummary summary;
   AssocHit best;
   AcatAcc acat_acc; // streaming — O(1) not O(M)
+  // stage-2 perm (trans/gw, approximate): keep top-K dosages by nominal p
+  std::vector<std::pair<double, Eigen::VectorXd>> top; // unsorted; trimmed to K
 };
+
+// max-heap by p (largest p at front) — retain smallest K p-values
+static void topk_consider(std::vector<std::pair<double, Eigen::VectorXd>>& top, int K, double p,
+                          const Eigen::VectorXd& g) {
+  if (K <= 0 || !std::isfinite(p)) return;
+  if (static_cast<int>(top.size()) < K) {
+    top.emplace_back(p, g);
+    if (static_cast<int>(top.size()) == K) {
+      std::make_heap(top.begin(), top.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    }
+    return;
+  }
+  if (p >= top.front().first) return;
+  std::pop_heap(top.begin(), top.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+  top.back() = {p, g};
+  std::push_heap(top.begin(), top.end(),
+                 [](const auto& a, const auto& b) { return a.first < b.first; });
+}
 
 template <typename Job>
 static void fill_hit_meta(AssocHit& h, const Job& job, const SnpRec& snp) {
@@ -528,6 +550,109 @@ static AssocHit hit_from_gty(const GenePrepLm& prep, double gtg, double gty, dou
   return h;
 }
 
+// Stage-2 gene perm on top-K SNPs only (trans/gw FastQTL-style; approximate, conservative).
+// Document: p_emp uses min-p over top-K not full SNP set when --perm on trans/gw SNP-outer path.
+template <typename Job>
+void stage2_perm_topk(const Options& opt, Model model, Job& job) {
+  if (opt.perm <= 0 || job.top.empty()) {
+    job.summary.p_emp = std::numeric_limits<double>::quiet_NaN();
+    job.summary.p_beta = std::numeric_limits<double>::quiet_NaN();
+    return;
+  }
+  if (!(job.best.p < opt.perm_trans_thr) || job.summary.n_tested == 0) {
+    job.summary.p_emp = std::numeric_limits<double>::quiet_NaN();
+    job.summary.p_beta = std::numeric_limits<double>::quiet_NaN();
+    return;
+  }
+  std::vector<Eigen::VectorXd> cached;
+  cached.reserve(job.top.size());
+  for (auto& e : job.top) cached.push_back(std::move(e.second));
+  job.top.clear();
+
+  GeneReady grb;
+  grb.keep = job.gr.keep;
+  grb.X = job.gr.X;
+  grb.K = job.gr.K;
+  grb.basis = job.gr.basis;
+  grb.has_basis = job.gr.has_basis;
+  grb.y = job.gr.y;
+
+  GenePrepLm lm_c;
+  GenePrepLmm lmm_c;
+  GenePrepGlm glm_c;
+  GenePrepGlmm glmm_c;
+  prep_null(model, opt.fast, grb, &lm_c, &lmm_c, &glm_c, &glmm_c);
+
+  Eigen::VectorXd y_perm_base = grb.y;
+  if (model == Model::Lm && lm_c.n > 0) {
+    y_perm_base = lm_c.y_s;
+  } else if (model == Model::Lmm && lmm_c.n > 0) {
+    const Eigen::VectorXd& dinv = lmm_c.dinv;
+    Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
+    Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+    if (ldlt.info() == Eigen::Success) {
+      const Eigen::VectorXd b0 = ldlt.solve(XtDy);
+      const Eigen::VectorXd r_til = lmm_c.y_til - lmm_c.X_til * b0;
+      y_perm_base = lmm_c.Q * r_til;
+    }
+  }
+
+  const double T_obs = job.best.p;
+  std::vector<double> T_perm(static_cast<size_t>(opt.perm));
+  std::vector<double> perm_min_p(static_cast<size_t>(opt.perm));
+  GeneReady grb2 = grb;
+  grb2.y.resize(y_perm_base.size());
+  std::atomic<int> perm_err{0};
+#pragma omp parallel for schedule(dynamic) if (opt.threads > 1) firstprivate(grb2)
+  for (int b = 0; b < opt.perm; ++b) {
+    if (perm_err.load()) continue;
+    try {
+      std::mt19937 rng_b(static_cast<unsigned>(opt.seed >= 0 ? opt.seed : 1) +
+                         static_cast<unsigned>(b) * 9973u +
+                         static_cast<unsigned>(std::hash<std::string>{}(job.gene)));
+      std::vector<int> idx(static_cast<size_t>(y_perm_base.size()));
+      std::iota(idx.begin(), idx.end(), 0);
+      std::shuffle(idx.begin(), idx.end(), rng_b);
+      for (int i = 0; i < y_perm_base.size(); ++i)
+        grb2.y(i) = y_perm_base(idx[static_cast<size_t>(i)]);
+      if (model == Model::Lmm && lmm_c.n > 0 && lmm_c.Q.size() > 0) {
+        const Eigen::VectorXd& dinv = lmm_c.dinv;
+        Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
+        Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
+        Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+        if (ldlt.info() == Eigen::Success) {
+          const Eigen::VectorXd b0 = ldlt.solve(XtDy);
+          grb2.y += lmm_c.Q * (lmm_c.X_til * b0);
+        }
+      }
+      GenePrepLm lm_b;
+      GenePrepLmm lmm_b;
+      GenePrepGlm glm_b;
+      GenePrepGlmm glmm_b;
+      prep_null(model, opt.fast, grb2, &lm_b, &lmm_b, &glm_b, &glmm_b);
+      double minp = 1.0;
+      for (const auto& gd : cached) {
+        const double p = test_one_p(model, opt.fast, grb2, gd, &lm_b, &lmm_b, &glm_b, &glmm_b);
+        if (std::isfinite(p) && p < minp) minp = p;
+      }
+      T_perm[static_cast<size_t>(b)] = -std::log10(std::max(minp, 1e-300));
+      perm_min_p[static_cast<size_t>(b)] = minp;
+    } catch (...) {
+      perm_err.store(1);
+    }
+  }
+  if (perm_err.load()) die("stage-2 permutation failed");
+  const double Tobs = -std::log10(std::max(T_obs, 1e-300));
+  job.summary.p_emp = p_emp_count(Tobs, T_perm);
+  if (!opt.disable_beta_approx) {
+    beta_approx_p(perm_min_p, T_obs, job.summary.p_beta, job.summary.beta_shape1,
+                  job.summary.beta_shape2);
+  } else {
+    job.summary.p_beta = std::numeric_limits<double>::quiet_NaN();
+  }
+}
+
 template <typename G>
 void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double maf,
                        const std::string& scope, ScopeOut& out, double pthr,
@@ -578,6 +703,7 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
 
       double gtg = 0;
       if (!residualize_g(prep0, g_full, g_s, gtg, Xt_g_buf)) {
+        const int topK = (opt.perm > 0) ? opt.perm_trans_top : 0;
         for (int gi = 0; gi < Gz; ++gi) {
           auto& job = jobs[static_cast<size_t>(gi)];
           if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
@@ -585,22 +711,31 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
           h.p = 1.0;
           h.n = prep0.n;
           h.maf = maf_sub;
+          if (topK > 0) topk_consider(job.top, topK, h.p, g_full);
           apply_snp_hit(job, h, snp, pthr, Model::Lm, out);
         }
         return true;
       }
 
       gty.noalias() = Ys * g_s;
-      // each job owned by one static-scheduled thread; only file write needs critical
+      // static schedule: each gene once; write deferred for gene-index order (bit-identical)
+      std::vector<AssocHit> write_hits(static_cast<size_t>(Gz));
+      std::vector<char> write_flag(static_cast<size_t>(Gz), 0);
+      const int topK = (opt.perm > 0) ? opt.perm_trans_top : 0;
 #pragma omp parallel for schedule(static) if (opt.threads > 1 && Gz > 32) num_threads(opt.threads)
       for (int gi = 0; gi < Gz; ++gi) {
         auto& job = jobs[static_cast<size_t>(gi)];
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
         AssocHit h = hit_from_gty(job.prep, gtg, gty(gi), maf_sub);
+        if (topK > 0 && std::isfinite(h.p)) topk_consider(job.top, topK, h.p, g_full);
         if (apply_snp_hit_stats(job, h, snp, pthr)) {
-#pragma omp critical(eqtl_pairs)
-          write_pair_line(out.pairs, h, Model::Lm, out.tag);
+          write_hits[static_cast<size_t>(gi)] = std::move(h);
+          write_flag[static_cast<size_t>(gi)] = 1;
         }
+      }
+      for (int gi = 0; gi < Gz; ++gi) {
+        if (write_flag[static_cast<size_t>(gi)])
+          write_pair_line(out.pairs, write_hits[static_cast<size_t>(gi)], Model::Lm, out.tag);
       }
       return true;
     });
@@ -625,6 +760,9 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
         if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) continue;
         AssocHit h = test_lm(job.prep, g);
         h.maf = maf_sub;
+        if (opt.perm > 0)
+          topk_consider(job.top, opt.perm_trans_top, h.p,
+                        Eigen::Map<const Eigen::VectorXd>(g_buf.data(), nk));
         apply_snp_hit(job, h, snp, pthr, Model::Lm, out);
       }
       return true;
@@ -635,6 +773,11 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
     job.summary.acat_p = job.acat_acc.p();
     if (job.best.p <= pthr && job.best.p <= 1.0) {
       write_pair_line(out.top, job.best, Model::Lm, scope);
+    }
+    if (opt.perm > 0) stage2_perm_topk(opt, Model::Lm, job);
+    else {
+      job.summary.p_emp = std::numeric_limits<double>::quiet_NaN();
+      job.summary.p_beta = std::numeric_limits<double>::quiet_NaN();
     }
   }
 }
@@ -651,6 +794,7 @@ struct GeneLmmJob {
   GeneSummary summary;
   AssocHit best;
   AcatAcc acat_acc;
+  std::vector<std::pair<double, Eigen::VectorXd>> top;
 };
 
 // Workspace for LMM Wald — hoist out of per-gene / per-SNP loops
@@ -703,10 +847,8 @@ static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_
   return h;
 }
 
-// Free GRM/basis after prep — only spectral prep fields needed for tests
+// Free large GRM/basis after prep; keep y/X/keep for optional stage-2 perm
 static void free_lmm_gene_raw(GeneLmmJob& j) {
-  j.gr.y.resize(0);
-  j.gr.X.resize(0, 0);
   j.gr.K.resize(0, 0);
   j.gr.basis.Q.resize(0, 0);
   j.gr.basis.lambda.resize(0);
@@ -783,19 +925,28 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       double maf_sub = snp.maf;
       if (!std::isfinite(subset_maf_or_nan(g_buf, &maf_sub))) return true;
       g_til.noalias() = Q.transpose() * g_buf;
+      const int Gz = static_cast<int>(jobs.size());
+      std::vector<AssocHit> write_hits(static_cast<size_t>(Gz));
+      std::vector<char> write_flag(static_cast<size_t>(Gz), 0);
+      const int topK = (opt.perm > 0) ? opt.perm_trans_top : 0;
 #pragma omp parallel if (opt.threads > 1 && jobs.size() > 32) num_threads(opt.threads)
       {
         LmmTestWs ws_t;
 #pragma omp for schedule(static)
-        for (int ji = 0; ji < static_cast<int>(jobs.size()); ++ji) {
+        for (int ji = 0; ji < Gz; ++ji) {
           auto& job = jobs[static_cast<size_t>(ji)];
           if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
           AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws_t);
+          if (topK > 0 && std::isfinite(h.p)) topk_consider(job.top, topK, h.p, g_buf);
           if (apply_snp_hit_stats(job, h, snp, pthr)) {
-#pragma omp critical(eqtl_pairs)
-            write_pair_line(out.pairs, h, Model::Lmm, out.tag);
+            write_hits[static_cast<size_t>(ji)] = std::move(h);
+            write_flag[static_cast<size_t>(ji)] = 1;
           }
         }
+      }
+      for (int ji = 0; ji < Gz; ++ji) {
+        if (write_flag[static_cast<size_t>(ji)])
+          write_pair_line(out.pairs, write_hits[static_cast<size_t>(ji)], Model::Lmm, out.tag);
       }
       return true;
     });
@@ -829,6 +980,9 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
           g_til.noalias() = job.prep.Q.transpose() * g;
         }
         AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws);
+        if (opt.perm > 0)
+          topk_consider(job.top, opt.perm_trans_top, h.p,
+                        Eigen::Map<const Eigen::VectorXd>(g_buf.data(), nk));
         apply_snp_hit(job, h, snp, pthr, Model::Lmm, out);
       }
       return true;
@@ -842,6 +996,7 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     }
   }
 }
+
 
 int run_make_grm(const Options& opt) {
   MissPolicy mp{opt.miss, opt.max_miss};
@@ -1083,9 +1238,9 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       const double pthr = (scope == "cis") ? opt.pval_cis : opt.pval_trans;
       std::vector<GeneSummary> summaries;
 
-      // LM/LMM trans/gw, no perm: SNP-outer (I/O once). Else gene-outer.
+      // LM/LMM trans/gw: SNP-outer (I/O once). perm>0 → stage-2 top-K approx on genes with min-p < thr.
       const bool snp_outer =
-          opt.perm == 0 && (scope == "trans" || scope == "gw") &&
+          (scope == "trans" || scope == "gw") &&
           (model == Model::Lm || model == Model::Lmm);
       if (snp_outer && model == Model::Lm) {
         std::vector<GeneLmJob> jobs;

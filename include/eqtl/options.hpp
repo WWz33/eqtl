@@ -38,6 +38,9 @@ struct Options {
   int threads = 1;
 
   int perm = 0; // gene-level permutations; 0 = off
+  // ponytail: trans/gw FastQTL-style approx (document as approximate)
+  double perm_trans_thr = 1e-5; // only genes with obs min-p < thr get stage-2 perm
+  int perm_trans_top = 1000;   // top-K SNPs by nominal p for stage-2
   int seed = -1; // -1 = unset
   bool disable_beta_approx = false;
 

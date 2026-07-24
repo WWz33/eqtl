@@ -57,6 +57,8 @@ eqtl fission [options]
 | `--maf` | 0 | min MAF on gene-keep samples (`0`=off) |
 | `--fast` | off | LMM: sparse GRM approx; glm/glmm: fix null phi/sigma2 |
 | `--perm` | 0 | gene-level permutations (`0`=off) |
+| `--perm-trans-thr` | 1e-5 | **trans/gw** two-stage perm: stage-2 only if obs min-p < thr |
+| `--perm-trans-top` | 1000 | **trans/gw** stage-2 top-K SNPs by nominal p |
 | `--seed` | — | permutation / fission seed |
 | `--disable-beta-approx` | off | omit beta-approximated p |
 | `-o, --out` | eqtl_out | output prefix |
@@ -196,3 +198,5 @@ GCTA-compatible relatedness matrix. You can also use GRM computed directly by GC
 ## License
 
 MIT
+
+**Note (trans/gw + `--perm`):** On the SNP-outer path, `p_emp`/`p_beta` use a FastQTL-style two-stage approximation—full nominal scan, then min-p permutations on top-K SNPs only; conservative vs full-SNP exact perm. cis still uses exact full-window dosage perm.
