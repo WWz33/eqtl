@@ -6,7 +6,7 @@
 
 <!-- README-I18N:END -->
 
-cis/trans eQTL from VCF/BCF or PLINK bed and a sample×gene phenotype matrix.
+ cis/trans eQTL tools
 
 ## Getting Started
 
@@ -14,7 +14,7 @@ cis/trans eQTL from VCF/BCF or PLINK bed and a sample×gene phenotype matrix.
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
-bcftools index -t data/smoke.vcf.gz
+## PLINK bfile recommended
 plink2 --vcf data/smoke.vcf.gz --make-bed --out data/smoke --allow-extra-chr
 gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 
@@ -27,6 +27,7 @@ gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 ```
 
 ```bash
+## For VCF input, convert to BCF and index for faster I/O
 bcftools view -Ob -o panel.bcf panel.vcf.gz
 bcftools index panel.bcf
 ```
@@ -40,7 +41,7 @@ eqtl fission [options]
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `-v, --vcf` | * | VCF/BCF (GT); exclusive with `--bfile` |
+| `-v, --vcf` | * | exclusive with `--bfile` |
 | `-b, --bfile` | * | PLINK bfile prefix |
 | `-e, --pheno` | required* | phenotype matrix (col1=`sample`) |
 | `-g, --gff` | — | GFF3 gene features |
@@ -73,8 +74,6 @@ Split count matrix into two independent halves (binomial thinning): one for esti
 | `--epsilon` | 0.5 | thinning fraction (0,1) |
 | `--fission-max-iter` | 1000 | max PEER iterations |
 | `--fission-tol` | 1e-3 | PEER convergence tolerance |
-
-\* exactly one of `--vcf` or `--bfile`; pheno not required with `--make-grm`
 
 ## Input files
 
@@ -193,14 +192,7 @@ Same columns as pairs. ≤1 row per gene (lowest p among threshold-passing SNPs)
 
 ### `--make-grm`
 
-```text
-{PREFIX}.grm.id
-{PREFIX}.grm.bin
-```
-
-## Citation
-
-See repository release notes / paper when available.
+GCTA-compatible relatedness matrix. You can also use GRM computed directly by GCTA.
 
 ## License
 
