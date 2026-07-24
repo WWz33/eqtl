@@ -52,8 +52,8 @@ eqtl fission [options]
 | `-w, --window` | 1000000 | cis window around TSS (bp) |
 | `--pval-cis` | 1e-5 | cis output p threshold |
 | `--pval-trans` | 1e-5 | trans/gw output p threshold |
-| `--miss-hand` | filter | `filter` \| `impute` |
-| `--max-miss` | 0 | drop SNP if missing fraction > value |
+| `--miss-hand` | impute | `filter` \| `impute` |
+| `--max-miss` | 0.8 | drop SNP if missing fraction > value |
 | `--maf` | 0 | min MAF on gene-keep samples (`0`=off) |
 | `--fast` | off | LMM: sparse GRM approx; glm/glmm: fix null phi/sigma2 |
 | `--perm` | 0 | gene-level permutations (`0`=off) |

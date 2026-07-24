@@ -28,10 +28,10 @@ struct Options {
   double pval_cis = 1e-5;
   double pval_trans = 1e-5;
 
-  MissHand miss = MissHand::Filter;
+  MissHand miss = MissHand::Impute;
   // drop SNP if missing fraction among analysis samples > max_miss
   // filter default 0 => any missing drops; impute still respects max_miss before fill
-  double max_miss = 0.0;
+  double max_miss = 0.8;
   // keep if maf_min <= MAF <= 1-maf_min on analysis samples (non-missing); 0 = off
   double maf = 0.0;
   bool fast = false;

@@ -52,8 +52,8 @@ eqtl fission [options]
 | `-w, --window` | 1000000 | TSS 两侧 cis 窗（bp） |
 | `--pval-cis` | 1e-5 | cis 写出 p 阈值 |
 | `--pval-trans` | 1e-5 | trans/gw 写出 p 阈值 |
-| `--miss-hand` | filter | `filter` \| `impute` |
-| `--max-miss` | 0 | 缺失比例超过该值则丢 SNP |
+| `--miss-hand` | impute | `filter` \| `impute` |
+| `--max-miss` | 0.8 | 缺失比例超过该值则丢 SNP |
 | `--maf` | 0 | 基因 keep 样本上最小 MAF（`0`=关） |
 | `--fast` | 关 | LMM：GRM 稀疏近似；glm/glmm：固定 null phi/sigma2 |
 | `--perm` | 0 | 基因级置换（`0`=关） |
