@@ -16,6 +16,9 @@ Dependencies: C++17, Eigen 3, htslib, OpenBLAS, OpenMP.
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
+# genotype: VCF → PLINK bed
+plink2 --vcf panel.vcf.gz --make-bed --out panel --allow-extra-chr
+
 # GRM
 gcta64 --bfile panel --make-grm --out panel_grm
 

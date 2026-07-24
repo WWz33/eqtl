@@ -16,6 +16,9 @@ cis/trans eQTL 映射。模型：LM、LMM、NB-GLM、GLMM。
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
 
+# 基因型：VCF → PLINK bed
+plink2 --vcf panel.vcf.gz --make-bed --out panel --allow-extra-chr
+
 # GRM
 gcta64 --bfile panel --make-grm --out panel_grm
 
