@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <limits>
 
 namespace eqtl {
 
@@ -13,16 +14,18 @@ constexpr long double kPi = 3.14159265358979323846L;
 double acat(const std::vector<double>& pvals) {
   if (pvals.empty()) return 1.0;
   long double sum = 0.0L;
-  const double n = static_cast<double>(pvals.size());
   int used = 0;
   for (double p : pvals) {
     if (!std::isfinite(p) || p <= 0.0) continue;
-    if (p >= 1.0) p = 1.0 - 1.0 / n;
-    // ACAT: equal weight tan((0.5-p)*pi); p-value = 0.5 - atan(T)/pi
-    sum += std::tan((0.5L - static_cast<long double>(p)) * kPi) / static_cast<long double>(n);
     ++used;
   }
   if (used == 0) return 1.0;
+  const double n = static_cast<double>(used);
+  for (double p : pvals) {
+    if (!std::isfinite(p) || p <= 0.0) continue;
+    if (p >= 1.0) p = 1.0 - 1.0 / n;
+    sum += std::tan((0.5L - static_cast<long double>(p)) * kPi) / static_cast<long double>(n);
+  }
   double ac = 0.5 - static_cast<double>(std::atan(sum) / kPi);
   if (ac < 0) ac = 0;
   if (ac > 1) ac = 1;
@@ -46,8 +49,9 @@ void beta_approx_p(const std::vector<double>& perm_min_p, double obs_min_p, doub
     if (std::isfinite(v) && v > 0.0 && v < 1.0) x.push_back(v);
   }
   if (x.size() < 10) {
-    p_beta = obs_min_p;
-    shape1 = shape2 = 1.0;
+    // ponytail: insufficient perm for beta fit → NA (not obs_min_p)
+    p_beta = std::numeric_limits<double>::quiet_NaN();
+    shape1 = shape2 = std::numeric_limits<double>::quiet_NaN();
     return;
   }
   const double mean = std::accumulate(x.begin(), x.end(), 0.0) / static_cast<double>(x.size());
@@ -58,14 +62,14 @@ void beta_approx_p(const std::vector<double>& perm_min_p, double obs_min_p, doub
   }
   var /= static_cast<double>(x.size() - 1);
   if (var <= 0 || mean <= 0 || mean >= 1) {
-    p_beta = obs_min_p;
-    shape1 = shape2 = 1.0;
+    p_beta = std::numeric_limits<double>::quiet_NaN();
+    shape1 = shape2 = std::numeric_limits<double>::quiet_NaN();
     return;
   }
   const double t = mean * (1.0 - mean) / var - 1.0;
   if (t <= 0) {
-    p_beta = obs_min_p;
-    shape1 = shape2 = 1.0;
+    p_beta = std::numeric_limits<double>::quiet_NaN();
+    shape1 = shape2 = std::numeric_limits<double>::quiet_NaN();
     return;
   }
   shape1 = std::max(1e-6, mean * t);
@@ -74,7 +78,7 @@ void beta_approx_p(const std::vector<double>& perm_min_p, double obs_min_p, doub
   if (o < 1e-300) o = 1e-300;
   if (o > 1.0 - 1e-16) o = 1.0 - 1e-16;
   p_beta = beta_cdf(o, shape1, shape2);
-  if (!std::isfinite(p_beta)) p_beta = obs_min_p;
+  if (!std::isfinite(p_beta)) p_beta = std::numeric_limits<double>::quiet_NaN();
 }
 
 }  // namespace eqtl

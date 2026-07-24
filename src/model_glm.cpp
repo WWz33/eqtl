@@ -5,12 +5,14 @@
 namespace eqtl {
 
 // NB GLM, log link: Var = mu + phi*mu^2. --fast: fix phi from null.
+// Working response: z = log(mu) + (y-mu)/mu  (no offset in z; offset only in eta = Xb+offset)
 
 static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::VectorXd& offset,
                     double& phi, Eigen::VectorXd& beta, Eigen::VectorXd& mu, bool estimate_phi,
                     bool& converged) {
   const int n = static_cast<int>(y.size());
   const int p = static_cast<int>(X.cols());
+  const int df = std::max(1, n - p);
   beta = Eigen::VectorXd::Zero(p);
   mu = y.cwiseMax(0.1);
   converged = false;
@@ -20,29 +22,32 @@ static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Ei
       const double m = std::max(mu(i), 1e-8);
       const double var = m + phi * m * m;
       w(i) = (m * m) / std::max(var, 1e-12);
-      z(i) = std::log(m) - offset(i) + (y(i) - m) / m;
+      // working response on eta scale without offset; design uses eta = Xb + offset
+      z(i) = std::log(m) + (y(i) - m) / m;
     }
+    // target: E[z] ≈ Xb + offset  ⇒  solve Xb ≈ z - offset
+    const Eigen::VectorXd rhs = z - offset;
     const Eigen::MatrixXd XtWX = X.transpose() * w.asDiagonal() * X;
     Eigen::LDLT<Eigen::MatrixXd> ldlt(XtWX);
     if (ldlt.info() != Eigen::Success) break;
-    const Eigen::VectorXd beta_new =
-        ldlt.solve(X.transpose() * (w.asDiagonal() * (z - offset)));
+    const Eigen::VectorXd beta_new = ldlt.solve(X.transpose() * (w.asDiagonal() * rhs));
     const Eigen::VectorXd mu_new = (X * beta_new + offset).array().exp().matrix();
     const double diff = (beta_new - beta).cwiseAbs().maxCoeff();
     beta = beta_new;
     mu = mu_new;
-    if (estimate_phi) {
-      double num = 0;
-      for (int i = 0; i < n; ++i) {
-        const double m = std::max(mu(i), 1e-8);
-        num += ((y(i) - m) * (y(i) - m) - m) / (m * m);
-      }
-      phi = std::max(1e-8, num / static_cast<double>(n));
-    }
     if (diff < 1e-6) {
       converged = true;
       break;
     }
+  }
+  // ponytail: alternate phi after beta IRLS (not joint inside each iter)
+  if (estimate_phi) {
+    double num = 0;
+    for (int i = 0; i < n; ++i) {
+      const double m = std::max(mu(i), 1e-8);
+      num += ((y(i) - m) * (y(i) - m) - m) / (m * m);
+    }
+    phi = std::max(1e-8, num / static_cast<double>(df));
   }
 }
 

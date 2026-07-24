@@ -5,6 +5,7 @@
 namespace eqtl {
 
 // Poisson GLMM with GRM random effect (PQL). SNP is fixed effect.
+// ponytail: Var=mu (no overdispersion); use NB GLM without GRM if phi>>0 needed.
 
 namespace {
 

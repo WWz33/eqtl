@@ -281,25 +281,42 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   }
   summary.acat_p = acat(pvals);
 
-  // Gene-level min-p perm. LM: shuffle residualized y (covar-adjusted exchangeability).
-  // LMM/GLM/GLMM: residual-style on y after null fit still fixes K/basis — reported as
-  // approximate; default perm=0. Stream path serializes on reader (critical).
+  // Gene-level min-p perm (default --perm 0).
+  // LM: residualize X then shuffle (Freedman–Lane).
+  // GLM: residualize X, shuffle, re-add fit, round counts.
+  // LMM: spectral null residual, shuffle, re-add null fit (K structure preserved better than OLS-on-y).
+  // GLMM: residual y-mu_null, shuffle, re-add mu (approx).
   if (opt.perm > 0 && n_tested > 0) {
     const double T_obs = best.p;
     std::vector<double> T_perm(static_cast<size_t>(opt.perm));
     std::vector<double> perm_min_p(static_cast<size_t>(opt.perm));
 
+    // LM/GLM: residualize fixed effects (Freedman–Lane style).
+    // LMM: residualize in spectral space using null dinv weights (preserves K structure better than OLS).
+    // GLMM: residualize on working scale y - mu_null (approx; still experimental).
     Eigen::VectorXd y_perm_base = gr.y;
     if (model == Model::Lm && lm_c.n > 0) {
       y_perm_base = lm_c.y_s;
-    } else if (model == Model::Lmm || model == Model::Glmm) {
-      if (gr.X.cols() > 0) {
-        Eigen::LDLT<Eigen::MatrixXd> ldlt(gr.X.transpose() * gr.X);
-        if (ldlt.info() == Eigen::Success) {
-          const Eigen::VectorXd b = ldlt.solve(gr.X.transpose() * gr.y);
-          y_perm_base = gr.y - gr.X * b;
-        }
+    } else if (model == Model::Glm && gr.X.cols() > 0) {
+      Eigen::LDLT<Eigen::MatrixXd> ldlt(gr.X.transpose() * gr.X);
+      if (ldlt.info() == Eigen::Success) {
+        const Eigen::VectorXd b = ldlt.solve(gr.X.transpose() * gr.y);
+        y_perm_base = gr.y - gr.X * b;
       }
+    } else if (model == Model::Lmm && lmm_c.n > 0) {
+      // residualize y_til under null (X_til, dinv): y_til - X_til * beta0, back-transform by Q
+      const Eigen::VectorXd& dinv = lmm_c.dinv;
+      Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
+      Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
+      Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+      if (ldlt.info() == Eigen::Success) {
+        const Eigen::VectorXd b0 = ldlt.solve(XtDy);
+        const Eigen::VectorXd r_til = lmm_c.y_til - lmm_c.X_til * b0;
+        y_perm_base = lmm_c.Q * r_til; // residual in original sample space
+      }
+    } else if (model == Model::Glmm && glmm_c.n > 0) {
+      // Pearson-ish residual on mean scale: y - mu_null
+      if (glmm_c.mu.size() == gr.y.size()) y_perm_base = gr.y - glmm_c.mu;
     }
 
     // ponytail: build grb once outside loop; only y changes per perm
@@ -323,6 +340,36 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
 
       for (int i = 0; i < y_perm_base.size(); ++i)
         grb.y(i) = y_perm_base(idx[static_cast<size_t>(i)]);
+      if (model == Model::Glm && gr.X.cols() > 0) {
+        // restore fixed-effect fit after residual shuffle; clamp to nonneg counts
+        Eigen::LDLT<Eigen::MatrixXd> ldlt(gr.X.transpose() * gr.X);
+        if (ldlt.info() == Eigen::Success) {
+          const Eigen::VectorXd b = ldlt.solve(gr.X.transpose() * gr.y);
+          const Eigen::VectorXd fit = gr.X * b;
+          for (int i = 0; i < grb.y.size(); ++i) {
+            double v = fit(i) + grb.y(i);
+            if (v < 0) v = 0;
+            grb.y(i) = std::round(v);
+          }
+        }
+      } else if (model == Model::Glmm && glmm_c.mu.size() == grb.y.size()) {
+        for (int i = 0; i < grb.y.size(); ++i) {
+          double v = glmm_c.mu(i) + grb.y(i);
+          if (v < 0) v = 0;
+          grb.y(i) = std::round(v);
+        }
+      } else if (model == Model::Lmm && lmm_c.n > 0 && lmm_c.Q.size() > 0) {
+        // residual was in sample space; add back null fixed fit in original y
+        const Eigen::VectorXd& dinv = lmm_c.dinv;
+        Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
+        Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
+        Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+        if (ldlt.info() == Eigen::Success) {
+          const Eigen::VectorXd b0 = ldlt.solve(XtDy);
+          const Eigen::VectorXd fit = lmm_c.Q * (lmm_c.X_til * b0);
+          grb.y += fit;
+        }
+      }
 
       GenePrepLm lm_b;
       GenePrepLmm lmm_b;
