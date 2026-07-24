@@ -34,8 +34,10 @@ void PlinkBed::read_fam(const std::string& path) {
     if (t.size() < 2) die("malformed fam line (need FID IID ...): " + path);
     samples_.push_back(t[1]);
   }
+  if (samples_.empty()) die("empty fam: " + path);
+  // bed columns align 1:1 with fam rows — cannot drop; duplicate IID is fatal
+  (void)dedupe_ids(samples_, [](int, int) { return false; }, "plink fam IID");
   n_file_ = samples_.size();
-  if (n_file_ == 0) die("empty fam: " + path);
 }
 
 void PlinkBed::read_bim(const std::string& path) {
@@ -57,6 +59,13 @@ void PlinkBed::read_bim(const std::string& path) {
     sites_.push_back(std::move(s));
   }
   if (sites_.empty()) die("empty bim: " + path);
+  {
+    std::vector<std::string> keys;
+    keys.reserve(sites_.size());
+    for (const auto& s : sites_)
+      keys.push_back(s.chrom + ":" + std::to_string(s.pos) + ":" + s.a1 + ":" + s.a2);
+    (void)dedupe_ids(keys, [](int, int) { return false; }, "plink bim site");
+  }
 }
 
 void PlinkBed::build_chrom_ranges() {

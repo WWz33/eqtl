@@ -2,7 +2,6 @@
 #include "eqtl/util.hpp"
 #include <fstream>
 #include <sstream>
-#include <set>
 #include <limits>
 #include <cmath>
 #include <cstdlib>
@@ -27,7 +26,15 @@ PhenoData load_pheno(const std::string& path) {
   // header[0] is sample column name (ignored); rest gene ids
   PhenoData P;
   for (size_t i = 1; i < header.size(); ++i) P.gene_ids.push_back(trim(header[i]));
+  // gene id dups: names only (columns are distinct positions; identical names always conflict)
+  {
+    auto keep_g = dedupe_ids(P.gene_ids, [](int, int) { return false; }, "pheno genes");
+    if (static_cast<int>(keep_g.size()) != static_cast<int>(P.gene_ids.size())) {
+      // unreachable: payload_equal always false → die on dup; keep for completeness
+    }
+  }
 
+  std::vector<std::string> raw_ids;
   std::vector<std::vector<double>> rows;
   while (std::getline(in, line)) {
     line = trim(line);
@@ -35,7 +42,7 @@ PhenoData load_pheno(const std::string& path) {
     auto tok = split_line(line);
     if (tok.size() != header.size())
       die("pheno row column mismatch for sample " + (tok.empty() ? "?" : tok[0]));
-    P.sample_ids.push_back(trim(tok[0]));
+    raw_ids.push_back(trim(tok[0]));
     std::vector<double> r(P.gene_ids.size());
     for (size_t j = 0; j < P.gene_ids.size(); ++j) {
       if (tok[j + 1] == "NA" || tok[j + 1] == "NaN" || tok[j + 1] == ".")
@@ -44,15 +51,30 @@ PhenoData load_pheno(const std::string& path) {
     }
     rows.push_back(std::move(r));
   }
-  if (P.sample_ids.empty()) die("no samples in pheno");
-  // check dup ids
-  {
-    std::set<std::string> s(P.sample_ids.begin(), P.sample_ids.end());
-    if (s.size() != P.sample_ids.size()) die("duplicate sample ids in pheno");
+  if (raw_ids.empty()) die("no samples in pheno");
+  auto keep = dedupe_ids(
+      raw_ids,
+      [&](int a, int b) {
+        const auto& ra = rows[static_cast<size_t>(a)];
+        const auto& rb = rows[static_cast<size_t>(b)];
+        if (ra.size() != rb.size()) return false;
+        for (size_t j = 0; j < ra.size(); ++j) {
+          const double x = ra[j], y = rb[j];
+          if (std::isnan(x) && std::isnan(y)) continue;
+          if (!(x == y)) return false;
+        }
+        return true;
+      },
+      "pheno samples");
+  P.sample_ids.clear();
+  P.sample_ids.reserve(keep.size());
+  P.Y.resize(static_cast<int>(keep.size()), static_cast<int>(P.gene_ids.size()));
+  for (int r = 0; r < static_cast<int>(keep.size()); ++r) {
+    const int i = keep[static_cast<size_t>(r)];
+    P.sample_ids.push_back(raw_ids[static_cast<size_t>(i)]);
+    for (size_t j = 0; j < P.gene_ids.size(); ++j)
+      P.Y(r, static_cast<int>(j)) = rows[static_cast<size_t>(i)][j];
   }
-  P.Y.resize(P.sample_ids.size(), P.gene_ids.size());
-  for (size_t i = 0; i < rows.size(); ++i)
-    for (size_t j = 0; j < P.gene_ids.size(); ++j) P.Y(i, j) = rows[i][j];
   info("pheno: " + std::to_string(P.sample_ids.size()) + " samples, " +
        std::to_string(P.gene_ids.size()) + " genes");
   return P;
@@ -118,6 +140,31 @@ CovData load_covar(const std::string& path, const std::vector<std::string>& samp
   int nc = static_cast<int>(rows[0].size());
   if (names.empty()) {
     for (int j = 0; j < nc; ++j) names.push_back("cov" + std::to_string(j + 1));
+  }
+  {
+    auto keep = dedupe_ids(
+        file_ids,
+        [&](int a, int b) {
+          const auto& ra = rows[static_cast<size_t>(a)];
+          const auto& rb = rows[static_cast<size_t>(b)];
+          if (ra.size() != rb.size()) return false;
+          for (size_t j = 0; j < ra.size(); ++j)
+            if (!(ra[j] == rb[j])) return false;
+          return true;
+        },
+        "covar samples");
+    if (static_cast<int>(keep.size()) != static_cast<int>(file_ids.size())) {
+      std::vector<std::string> ids2;
+      std::vector<std::vector<double>> rows2;
+      ids2.reserve(keep.size());
+      rows2.reserve(keep.size());
+      for (int k : keep) {
+        ids2.push_back(file_ids[static_cast<size_t>(k)]);
+        rows2.push_back(std::move(rows[static_cast<size_t>(k)]));
+      }
+      file_ids.swap(ids2);
+      rows.swap(rows2);
+    }
   }
   auto fmap = index_map(file_ids);
   Eigen::MatrixXd raw(sample_ids.size(), nc);

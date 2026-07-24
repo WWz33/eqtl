@@ -2,6 +2,8 @@
 #include <cmath>
 #include <iostream>
 #include <algorithm>
+#include <unordered_map>
+#include <functional>
 #include <cctype>
 #include <limits>
 #include <cstdlib>
@@ -142,6 +144,35 @@ double p_from_t(double t, double df) {
   double x = df / (df + t * t);
   double p = betai(0.5 * df, 0.5, x);
   return std::min(1.0, std::max(0.0, p));
+}
+
+
+std::vector<int> dedupe_ids(const std::vector<std::string>& ids,
+                            const std::function<bool(int, int)>& payload_equal,
+                            const std::string& what) {
+  std::unordered_map<std::string, int> first;
+  first.reserve(ids.size() * 2);
+  std::vector<int> keep;
+  keep.reserve(ids.size());
+  int n_dup_ok = 0;
+  for (int i = 0; i < static_cast<int>(ids.size()); ++i) {
+    const auto& id = ids[static_cast<size_t>(i)];
+    auto it = first.find(id);
+    if (it == first.end()) {
+      first.emplace(id, i);
+      keep.push_back(i);
+      continue;
+    }
+    const int j = it->second;
+    if (!payload_equal(j, i)) {
+      die(what + ": duplicate id with conflicting values: " + id);
+    }
+    ++n_dup_ok;
+  }
+  if (n_dup_ok > 0)
+    warn(what + ": " + std::to_string(n_dup_ok) +
+         " duplicate id row(s) with identical values (kept first)");
+  return keep;
 }
 
 } // namespace eqtl

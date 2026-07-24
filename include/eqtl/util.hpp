@@ -1,6 +1,7 @@
 /* eqtl — small utils */
 #pragma once
 #include <string>
+#include <functional>
 #include <vector>
 #include <unordered_map>
 #include <sstream>
@@ -38,6 +39,13 @@ double beta_cdf(double x, double a, double b);
 std::vector<std::string> intersect_order(
     const std::vector<std::string>& prefer_order,
     const std::vector<std::string>& other);
+
+// Duplicate IDs: keep first. Same id + same payload → warn; same id + different payload → die.
+// payload_equal(i,j): true if row/col i matches j (id-only: always true).
+// Returns keep indices into original order.
+std::vector<int> dedupe_ids(const std::vector<std::string>& ids,
+                            const std::function<bool(int, int)>& payload_equal,
+                            const std::string& what);
 
 template <typename T>
 std::unordered_map<std::string, int> index_map(const std::vector<T>& ids) {
