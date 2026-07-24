@@ -27,11 +27,11 @@ gcta64 --bfile panel --make-grm --out panel_grm
 
 # cis-LMM with PEER factors as covariates
 ./eqtl -b panel -e fiss.Y2.tsv -c fiss.factors.tsv -g genes.gff \
-  -k panel_grm --model lmm --mode cis -o result
+  -k panel_grm --model lmm --mode cis -t 8 -o result
 
 # trans, multiple models
 ./eqtl -b panel -e pheno.tsv -g genes.gff -k panel_grm \
-  --model lm,lmm --mode trans --perm 1000 -o result
+  --model lm,lmm --mode trans --perm 1000 -t 8 -o result
 ```
 
 VCF/BCF input (`-v`): indexed BCF recommended.
