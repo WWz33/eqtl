@@ -221,20 +221,23 @@ Eigen::MatrixXd peer_factors(const Eigen::MatrixXd& Y_raw, int k,
   constexpr double Eps_pa   = 0.1,   Eps_pb   = 10.0;
 
   PeerState s;
-  s.W        = Eigen::MatrixXd::Zero(G, k);
   s.W_E2S    = Eigen::MatrixXd::Zero(k, k);
   s.W_Xprec  = Eigen::MatrixXd::Zero(k, k);
-  s.Alpha_E1 = Eigen::VectorXd::Ones(k);         // updated below
-  s.Eps_E1   = Eigen::VectorXd::Constant(G, Eps_pa / Eps_pb);  // prior mean
+  s.Alpha_E1 = Eigen::VectorXd::Ones(k);
+  s.Eps_E1   = Eigen::VectorXd::Constant(G, Eps_pa / Eps_pb);
   s.A_last    = s.Alpha_E1;
   s.XE2S_last = Eigen::MatrixXd::Identity(k, k) * n;
 
-  // init X ~ N(0,1)
+  // init X, W ~ N(0,1) — matches original PEER RANDN init
   {
     std::mt19937 rng(init_seed);
     std::normal_distribution<double> nd;
     s.X_E1 = Eigen::MatrixXd::NullaryExpr(
         n, k, [&](Eigen::Index, Eigen::Index) { return nd(rng); });
+    s.W = Eigen::MatrixXd::Zero(G, k);
+    for (int j = 0; j < k; ++j)
+      for (int i = 0; i < G; ++i)
+        s.W(i, j) = nd(rng);
   }
   s.X_E2S = n * Eigen::MatrixXd::Identity(k, k) + s.X_E1.transpose() * s.X_E1;
 
