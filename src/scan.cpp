@@ -333,7 +333,24 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   if (best.p <= pthr && best.p <= 1.0) {
     write_pair_line(out.top, best, model, scope);
   }
-  write_region_line(out.region, summary);
+}
+
+// BH on a vector of GeneSummary: fills q_bh from acat_p
+void bh_adjust(std::vector<GeneSummary>& gs) {
+  const int G = static_cast<int>(gs.size());
+  if (G == 0) return;
+  std::vector<int> idx(static_cast<size_t>(G));
+  std::iota(idx.begin(), idx.end(), 0);
+  std::sort(idx.begin(), idx.end(), [&](int a, int b) { return gs[a].acat_p < gs[b].acat_p; });
+  double qmin = 1.0;
+  for (int rank = G; rank >= 1; --rank) {
+    const int i = idx[static_cast<size_t>(rank - 1)];
+    double q = gs[i].acat_p * static_cast<double>(G) / static_cast<double>(rank);
+    if (q > 1.0) q = 1.0;
+    if (q < qmin) qmin = q;
+    else q = qmin;
+    gs[i].q_bh = q;
+  }
 }
 
 }  // namespace
@@ -443,6 +460,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       write_region_header(so.region);
 
       const double pthr = (scope == "cis") ? opt.pval_cis : opt.pval_trans;
+      std::vector<GeneSummary> summaries;
 
       for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
         const std::string& gene = ph.gene_ids[gi];
@@ -461,7 +479,6 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
             loc_store = it->second;
             locp = &loc_store;
           } else if (scope != "gw") {
-            // cis/trans need TSS; gw tests all pheno genes without annotation
             continue;
           }
         }
@@ -469,10 +486,11 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         GeneReady gr;
         if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
 
-        GeneSummary summary;
+        summaries.emplace_back();
+        GeneSummary& summary = summaries.back();
 
         if (scope == "cis") {
-          if (!locp) continue;
+          if (!locp) { summaries.pop_back(); continue; }
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
           auto stream = [&](const std::function<void(const SnpRec&)>& take) {
@@ -483,7 +501,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           };
           scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
         } else if (scope == "trans") {
-          if (!locp) continue;
+          if (!locp) { summaries.pop_back(); continue; }
           auto stream = [&](const std::function<void(const SnpRec&)>& take) {
             geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
               if (in_cis_window(s, *locp, opt.window)) return true;
@@ -492,7 +510,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
             });
           };
           scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
-        } else {  // gw
+        } else {
           auto stream = [&](const std::function<void(const SnpRec&)>& take) {
             geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
               take(s);
@@ -502,6 +520,8 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
         }
       }
+      bh_adjust(summaries);
+      for (const auto& s : summaries) write_region_line(so.region, s);
       info("finished " + prefix);
     }
   }

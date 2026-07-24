@@ -78,7 +78,7 @@ void write_pair_line(std::ostream& os, const AssocHit& h, Model m, const std::st
 void write_top_header(std::ostream& os, Model m) { write_pairs_header(os, m); }
 
 void write_region_header(std::ostream& os) {
-  os << "gene\tchrom\ttss\tn_tested\tn_sig\tacat_p\tp_emp\tp_beta\tbeta_shape1\tbeta_shape2\n";
+  os << "gene\tchrom\ttss\tn_tested\tn_sig\tacat_p\tq_bh\tp_emp\tp_beta\tbeta_shape1\tbeta_shape2\n";
 }
 
 static void fmt_na_or(char* out, size_t n, double v) {
@@ -87,25 +87,25 @@ static void fmt_na_or(char* out, size_t n, double v) {
 }
 
 void write_region_line(std::ostream& os, const GeneSummary& g) {
-  char p_emp[32], p_beta[32], buf[512];
+  char p_emp[32], p_beta[32], q_bh[32], buf[512];
   fmt_na_or(p_emp, sizeof(p_emp), g.p_emp);
   fmt_na_or(p_beta, sizeof(p_beta), g.p_beta);
+  fmt_na_or(q_bh, sizeof(q_bh), g.q_bh);
   const int n = std::snprintf(
-      buf, sizeof(buf), "%s\t%s\t%lld\t%d\t%d\t%.10g\t%s\t%s\t%.10g\t%.10g\n", g.gene.c_str(),
-      g.chrom.c_str(), static_cast<long long>(g.tss), g.n_tested, g.n_sig, g.acat_p, p_emp, p_beta,
-      g.beta_shape1, g.beta_shape2);
+      buf, sizeof(buf), "%s\t%s\t%lld\t%d\t%d\t%.10g\t%s\t%s\t%s\t%.10g\t%.10g\n", g.gene.c_str(),
+      g.chrom.c_str(), static_cast<long long>(g.tss), g.n_tested, g.n_sig, g.acat_p, q_bh, p_emp,
+      p_beta, g.beta_shape1, g.beta_shape2);
   if (n > 0 && static_cast<size_t>(n) < sizeof(buf)) {
     os.write(buf, n);
     return;
   }
-  // long gene id: stream (no silent drop)
   os << g.gene << '\t' << g.chrom << '\t' << g.tss << '\t' << g.n_tested << '\t' << g.n_sig << '\t'
      << g.acat_p << '\t';
-  if (std::isfinite(g.p_emp)) os << g.p_emp;
-  else os << "NA";
+  if (std::isfinite(g.q_bh)) os << g.q_bh; else os << "NA";
   os << '\t';
-  if (std::isfinite(g.p_beta)) os << g.p_beta;
-  else os << "NA";
+  if (std::isfinite(g.p_emp)) os << g.p_emp; else os << "NA";
+  os << '\t';
+  if (std::isfinite(g.p_beta)) os << g.p_beta; else os << "NA";
   os << '\t' << g.beta_shape1 << '\t' << g.beta_shape2 << '\n';
 }
 
