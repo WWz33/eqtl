@@ -100,14 +100,18 @@ $(HTS_LIB) $(HTS_SRC)/htslib_static.mk:
 $(BIN): $(OBJ) $(GFFSUB_OBJ) $(HTS_REQ) $(OPENBLAS_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJ) $(GFFSUB_OBJ) $(LDFLAGS)
 
+DEPFLAGS = -MMD -MP
+DEP := $(OBJ:.o=.d) $(GFFSUB_OBJ:.o=.d)
+-include $(DEP)
+
 src/%.o: src/%.cpp
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 $(GFFSUB_SRC)/src/%.o: $(GFFSUB_SRC)/src/%.cpp
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJ) $(GFFSUB_OBJ) $(BIN)
+	rm -f $(OBJ) $(GFFSUB_OBJ) $(DEP) $(BIN)
 
 smoke: $(BIN)
 	./scripts/run_smoke.sh

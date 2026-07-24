@@ -1,3 +1,4 @@
+#define _FILE_OFFSET_BITS 64
 /* eqtl — PLINK bed: sequential block fread + 2-bit lookup + buffer reuse */
 #include "eqtl/plink_bed.hpp"
 #include "eqtl/util.hpp"
@@ -91,12 +92,12 @@ void PlinkBed::open_bed(const std::string& path) {
   block_snps_ = std::max(kMinBlockSnps, kTargetBlockBytes / std::max<size_t>(bytes_per_snp_, 1));
   block_buf_.assign(block_snps_ * bytes_per_snp_, 0);
 
-  if (std::fseek(bed_fp_, 0, SEEK_END) != 0) die("bed seek end failed: " + path);
-  const long fsz = std::ftell(bed_fp_);
+  if (fseeko(bed_fp_, 0, SEEK_END) != 0) die("bed seek end failed: " + path);
+  const off_t fsz = ftello(bed_fp_);
   if (fsz < 0) die("bed ftell failed: " + path);
   const uint64_t expect = 3ull + bytes_per_snp_ * static_cast<uint64_t>(sites_.size());
   if (static_cast<uint64_t>(fsz) < expect) die("bed size too small for bim/fam: " + path);
-  if (std::fseek(bed_fp_, 3, SEEK_SET) != 0) die("bed seek data failed: " + path);
+  if (fseeko(bed_fp_, 3, SEEK_SET) != 0) die("bed seek data failed: " + path);
 }
 
 void PlinkBed::open(const std::string& prefix) {
@@ -158,8 +159,10 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
 
   const double miss_frac = static_cast<double>(n_miss) / static_cast<double>(n_an);
   if (miss_frac > miss.max_miss + 1e-15) return false;
-  if (miss.hand == MissHand::Filter && miss.max_miss <= 0.0 && n_miss > 0) return false;
-  if (n_miss > 0) {
+  if (miss.hand == MissHand::Filter && n_miss > 0) {
+    // filter: keep SNP only if miss_frac <= max_miss; never impute (analysis subset drops NA)
+    // dosage stays NaN for missing samples
+  } else if (n_miss > 0 && miss.hand == MissHand::Impute) {
     const double mu = sum / n_ok;
     for (int i = 0; i < n_an; ++i)
       if (!std::isfinite(out.dosage[static_cast<size_t>(i)])) out.dosage[static_cast<size_t>(i)] = mu;

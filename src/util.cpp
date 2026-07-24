@@ -5,12 +5,14 @@
 #include <cctype>
 #include <limits>
 #include <cstdlib>
+#include <stdexcept>
 
 namespace eqtl {
 
 void die(const std::string& msg) {
   std::cerr << "[E] " << msg << "\n";
-  std::exit(1);
+  // throw so OMP parallel regions don't exit() (UB); main catches
+  throw std::runtime_error(msg);
 }
 void warn(const std::string& msg) {
   std::cerr << "[W] " << msg << "\n";
@@ -75,22 +77,10 @@ bool chrom_equal(const std::string& a, const std::string& b) {
   return chrom_key(a) == chrom_key(b);
 }
 
-static double erfc_approx(double x) {
-  // Abramowitz-Stegun 7.1.26
-  double z = std::fabs(x);
-  double t = 1.0 / (1.0 + 0.5 * z);
-  double ans = t * std::exp(-z * z - 1.26551223 +
-      t * (1.00002368 + t * (0.37409196 + t * (0.09678418 +
-      t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 +
-      t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
-  return x >= 0 ? ans : 2.0 - ans;
-}
-
 double pnorm_two_sided(double z) {
   if (!std::isfinite(z)) return 1.0;
-  double az = std::fabs(z);
-  // P(|Z|>z) = 2*(1-Phi(z)) = erfc(z/sqrt(2))
-  double p = erfc_approx(az / std::sqrt(2.0));
+  // P(|Z|>z) = erfc(|z|/sqrt(2)); std::erfc is accurate in the tails
+  double p = std::erfc(std::fabs(z) / std::sqrt(2.0));
   if (p < 0) p = 0;
   if (p > 1) p = 1;
   return p;

@@ -253,7 +253,6 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
 
   const double miss_frac = static_cast<double>(n_miss) / static_cast<double>(n_an);
   if (miss_frac > miss.max_miss + 1e-15) return false;
-  if (miss.hand == MissHand::Filter && miss.max_miss <= 0.0 && n_miss > 0) return false;
 
   // effect-allele frequency (not folded to minor)
   double af = (ploidy_sum > 0) ? (sum / ploidy_sum) : 0.0;
@@ -261,7 +260,7 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   if (af > 1) af = 1;
   if (af < 1e-12 || af > 1.0 - 1e-12) return false; // monomorphic
 
-  if (n_miss > 0) {
+  if (n_miss > 0 && miss.hand == MissHand::Impute) {
     const double mu = sum / n_ok;
     for (int i = 0; i < n_an; ++i)
       if (!std::isfinite(out.dosage[static_cast<size_t>(i)]))
