@@ -65,6 +65,8 @@ eqtl fission [options]
 
 ### Fission subcommand
 
+Split count matrix into two independent halves (binomial thinning): one for estimating PEER factors, the other for eQTL testing. Avoids double-dipping the same data for confounder correction and association.
+
 | Flag | Default | Effect |
 |------|---------|--------|
 | `--peer-factors` | 10 | PEER factors to estimate |
