@@ -183,7 +183,7 @@ p ≤ 阈值的 SNP–基因对。
 
 PEER（Stegle et al. 2012）：带 ARD 先验的变分贝叶斯因子分析，在 Y1 上运行。若指定 `-c`，先从 Y1 回归已知协变量（Y2 不动）。
 
-输出：`{prefix}.Y1.tsv`、`{prefix}.Y2.tsv`（用作 `-e`）、`{prefix}.factors.tsv`（用作 `-c`）。所有 TSV 首列列头为 `sample_id`。
+输出：`{prefix}.Y1.tsv`、`{prefix}.Y2.tsv`（用作 `-e`）、`{prefix}.factors.tsv`（用作 `-c`）。
 
 ```bash
 ./eqtl fission -e counts.tsv --peer-factors 15 --epsilon 0.5 --seed 42 -o fiss

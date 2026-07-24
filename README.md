@@ -183,7 +183,7 @@ Splitting:
 
 PEER (Stegle et al. 2012): variational Bayes factor analysis with ARD priors, run on Y1. If `-c` given, known covariates are residualized from Y1 first (Y2 untouched).
 
-Output: `{prefix}.Y1.tsv`, `{prefix}.Y2.tsv` (use as `-e`), `{prefix}.factors.tsv` (use as `-c`). All TSV files have `sample_id` as the first column header.
+Output: `{prefix}.Y1.tsv`, `{prefix}.Y2.tsv` (use as `-e`), `{prefix}.factors.tsv` (use as `-c`).
 
 ```bash
 ./eqtl fission -e counts.tsv --peer-factors 15 --epsilon 0.5 --seed 42 -o fiss
