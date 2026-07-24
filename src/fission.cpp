@@ -166,20 +166,21 @@ static void update_X(PeerState& s, const Eigen::MatrixXd& Y) {
 
 // Eps update. YtX = XtY.T passed in — no extra DGEMM needed.
 // Uses current Eps_E1 (previous iteration's) with stale A_last / XE2S_last.
+// pheno_E2 = pheno_var + Y.*Y (original PEER includes observation variance 0.01)
 static void update_Eps(PeerState& s, const Eigen::MatrixXd& Y,
+                       const Eigen::MatrixXd& pheno_E2,  // n×G
                        const Eigen::MatrixXd& YtX,  // G×K = XtY.T
                        double pa, double pb) {
   const int n = Y.rows(), G = Y.cols(), K = static_cast<int>(s.W.cols());
   const double a_eps = pa + 0.5 * n;
 
-  // b1[d] = ||Y[:,d]||²
-  const Eigen::VectorXd b1 = Y.colwise().squaredNorm().transpose();
+  // b1[d] = sum_i pheno_E2[i,d] (includes obs variance)
+  const Eigen::VectorXd b1 = pheno_E2.colwise().sum().transpose();
 
   // b2[d] = YtX[d,:] · W[d,:]  (elementwise then rowwise sum)
   const Eigen::VectorXd b2 = (YtX.array() * s.W.array()).rowwise().sum();
 
   // b3[d] = tr(X_E2S · (Wcov_stale + w·w.T))
-  // Wcov_stale = (diag(A_last) + XE2S_last · Eps_E1[d])^{-1}  (stale A, X)
   const Eigen::MatrixXd diag_A = s.A_last.asDiagonal();
   const Eigen::MatrixXd I_K    = Eigen::MatrixXd::Identity(K, K);
   Eigen::VectorXd b3(G);
@@ -244,22 +245,30 @@ Eigen::MatrixXd peer_factors(const Eigen::MatrixXd& Y_raw, int k,
   // seed Alpha from zero W (tight ARD prior; first iterations release factors)
   update_Alpha(s, G, Alpha_pa, Alpha_pb);
 
+  // pheno_E2 = pheno_var + Y.*Y (original PEER, pheno_var=0.01)
+  constexpr double pheno_var = 0.01;
+  Eigen::MatrixXd pheno_E2 = Y.array().square() + pheno_var;
+
+  // convergence: original PEER checks |delta_res_var| < var_tolerance every iter
+  constexpr double var_tolerance = 1e-8;
   double last_res_var = std::numeric_limits<double>::max();
-  Eigen::MatrixXd XtY;  // K×G, computed in W update, reused (as .T) in Eps
+  Eigen::MatrixXd XtY;
 
   for (int iter = 0; iter < max_iter; ++iter) {
     update_W(s, Y, XtY);
     update_Alpha(s, G, Alpha_pa, Alpha_pb);
     update_X(s, Y);
-    update_Eps(s, Y, XtY.transpose(), Eps_pa, Eps_pb);
+    update_Eps(s, Y, pheno_E2, XtY.transpose(), Eps_pa, Eps_pb);
 
-    // convergence check every 5 iters (one extra DGEMM each check)
-    if ((iter + 1) % 5 == 0 || iter == 0) {
-      const double res_var =
-          (Y - s.X_E1 * s.W.transpose()).squaredNorm() / (n * G);
-      if (std::abs(last_res_var - res_var) < tol) break;
-      last_res_var = res_var;
-    }
+    // convergence: residual variance (matches original PEER var_tolerance check)
+    const double res_var =
+        (Y - s.X_E1 * s.W.transpose()).array().square().mean();
+    if (std::abs(last_res_var - res_var) < var_tolerance) break;
+    // ponytail: skip full ELBO calc (original computes it but only uses it
+    // when tolerance>0; default tolerance=1e-3 fires on bound, but var_tolerance=1e-8
+    // almost always fires first in practice). Matching var_tolerance behavior.
+    if (std::abs(last_res_var - res_var) < tol) break;
+    last_res_var = res_var;
   }
 
   return s.X_E1;
