@@ -27,10 +27,9 @@ gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 ```
 
 ```bash
-## 估 PEER 因子并作为协变量跑 eQTL
-eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
-./eqtl -b data/smoke -e fiss.Y2.tsv -c fiss.factors.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis -o out_fiss
+## 用 PEER 因子作为协变量
+./eqtl -b data/smoke -e data/smoke.pheno.tsv -c peer_factors.tsv -g data/smoke.gff \
+  -k data/smoke_grm --model lmm --mode cis -o out
 ```
 
 ```bash
@@ -74,6 +73,13 @@ eqtl fission [options]
 ### Fission 子命令
 
 把计数矩阵二项式拆分成独立的两半：一半估 PEER 因子，另一半跑 eQTL 检验。避免混杂校正和关联检验用同一份数据。
+
+```bash
+eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
+# 输出: fiss.Y1.tsv, fiss.Y2.tsv, fiss.factors.tsv
+./eqtl -b data/panel -e fiss.Y2.tsv -c fiss.factors.tsv -g genes.gff \
+  -k grm --model lmm --mode cis -o out_fiss
+```
 
 | 选项 | 默认 | 说明 |
 |------|------|------|

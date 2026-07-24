@@ -27,10 +27,9 @@ gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 ```
 
 ```bash
-## Estimate PEER factors and run eQTL with covariates
-eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
-./eqtl -b data/smoke -e fiss.Y2.tsv -c fiss.factors.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis -o out_fiss
+## With PEER factors as covariates
+./eqtl -b data/smoke -e data/smoke.pheno.tsv -c peer_factors.tsv -g data/smoke.gff \
+  -k data/smoke_grm --model lmm --mode cis -o out
 ```
 
 ```bash
@@ -74,6 +73,13 @@ eqtl fission [options]
 ### Fission subcommand
 
 Split count matrix into two independent halves (binomial thinning): one for estimating PEER factors, the other for eQTL testing. Avoids double-dipping the same data for confounder correction and association.
+
+```bash
+eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
+# outputs: fiss.Y1.tsv, fiss.Y2.tsv, fiss.factors.tsv
+./eqtl -b data/panel -e fiss.Y2.tsv -c fiss.factors.tsv -g genes.gff \
+  -k grm --model lmm --mode cis -o out_fiss
+```
 
 | Flag | Default | Effect |
 |------|---------|--------|
