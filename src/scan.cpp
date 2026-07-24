@@ -12,7 +12,6 @@
 #include <numeric>
 #include <unordered_map>
 #include <cstring>
-#include <cstdlib>
 
 namespace eqtl {
 
@@ -227,16 +226,6 @@ bool in_cis_window(const SnpRec& s, const GeneLoc& loc, int window) {
   return s.pos >= cstart && s.pos <= cend;
 }
 
-int chrom_rank(const std::string& c) {
-  std::string k = chrom_key(c);
-  if (k == "X" || k == "x") return 23;
-  if (k == "Y" || k == "y") return 24;
-  if (k == "MT" || k == "M" || k == "mt" || k == "m") return 25;
-  char* end = nullptr;
-  long v = std::strtol(k.c_str(), &end, 10);
-  if (end && *end == '\0' && v >= 1 && v <= 22) return static_cast<int>(v);
-  return 99;
-}
 
 // Stream SNPs for one gene (list path removed; all callers stream).
 template <typename StreamFn>
@@ -494,23 +483,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       const double pthr = (scope == "cis") ? opt.pval_cis : opt.pval_trans;
       std::vector<GeneSummary> summaries;
 
-      std::vector<size_t> gene_order(ph.gene_ids.size());
-      std::iota(gene_order.begin(), gene_order.end(), 0);
-      if (scope == "cis" && have_gff) {
-        std::sort(gene_order.begin(), gene_order.end(), [&](size_t a, size_t b) {
-          auto it_a = annot.find(ph.gene_ids[a]);
-          auto it_b = annot.find(ph.gene_ids[b]);
-          if (it_a == annot.end() && it_b == annot.end()) return a < b;
-          if (it_a == annot.end()) return false;
-          if (it_b == annot.end()) return true;
-          const int ra = chrom_rank(it_a->second.chrom);
-          const int rb = chrom_rank(it_b->second.chrom);
-          if (ra != rb) return ra < rb;
-          return it_a->second.tss < it_b->second.tss;
-        });
-      }
-
-      for (size_t gi : gene_order) {
+      for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
         const std::string& gene = ph.gene_ids[gi];
         Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
 
@@ -542,7 +515,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
           const int64_t cend = locp->tss + opt.window;
           auto stream = [&](auto&& take) {
-            geno.for_each_snp_region_t(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
+            geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
               take(s);
               return true;
             });
@@ -551,7 +524,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         } else if (scope == "trans") {
           if (!locp) { summaries.pop_back(); continue; }
           auto stream = [&](auto&& take) {
-            geno.for_each_snp_t(mp, maf, [&](const SnpRec& s) {
+            geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
               if (in_cis_window(s, *locp, opt.window)) return true;
               take(s);
               return true;
@@ -560,7 +533,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
         } else {
           auto stream = [&](auto&& take) {
-            geno.for_each_snp_t(mp, maf, [&](const SnpRec& s) {
+            geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
               take(s);
               return true;
             });
@@ -592,7 +565,6 @@ int run_eqtl(const Options& opt) {
 
   VcfSession vcf;
   vcf.open(opt.vcf);
-  vcf.set_threads(opt.threads);
   std::vector<std::string> sample_order = intersect_order(ph.sample_ids, vcf.samples());
   if (sample_order.empty()) die("no overlapping samples between pheno and VCF");
   info("overlap samples: " + std::to_string(sample_order.size()));
