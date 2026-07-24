@@ -27,6 +27,18 @@ gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
 ```
 
 ```bash
+## 用 PEER 因子作为协变量（外部 PEER 或内置 fission）
+# 方式 A：内置 fission（拆分计数矩阵，估 PEER，输出 Y2 + factors）
+eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
+./eqtl -b data/smoke -e fiss.Y2.tsv -c fiss.factors.tsv -g data/smoke.gff \
+  -k data/smoke_grm --model lmm --mode cis -o out_fiss
+
+# 方式 B：外部 PEER 因子文件作为协变量
+./eqtl -b data/smoke -e data/smoke.pheno.tsv -c peer_factors.tsv -g data/smoke.gff \
+  -k data/smoke_grm --model lmm --mode cis -o out_peer
+```
+
+```bash
 ## 如果输入vcf 建议转为bcf并建立索引提高运算速度
 bcftools view -Ob -o panel.bcf panel.vcf.gz
 bcftools index panel.bcf
