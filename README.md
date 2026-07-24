@@ -17,18 +17,10 @@ cd eqtl && make -j
 ## PLINK bfile recommended
 plink2 --vcf data/smoke.vcf.gz --make-bed --out data/smoke --allow-extra-chr
 gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
-
-./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis --miss-hand impute -o data/out
-
-./eqtl -b data/smoke -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis --miss-hand impute --maf 0.05 \
-  -o data/out_bed
-```
-
-```bash
-## With PEER factors as covariates
-./eqtl -b data/smoke -e data/smoke.pheno.tsv -c peer_factors.tsv -g data/smoke.gff \
+## Estimate PEER factors
+eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
+## Run eQTL with PEER factors as covariates
+./eqtl -b data/smoke -e data/counts.tsv -c peer_factors.tsv -g data/smoke.gff \
   -k data/smoke_grm --model lmm --mode cis -o out
 ```
 
@@ -96,12 +88,6 @@ eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
 |-------|--------|
 | `--vcf` | VCF/BCF, field **GT** |
 | `--bfile` | PLINK `.bed`/`.bim`/`.fam` |
-
-```bash
-bcftools index -t panel.vcf.gz
-# or
-bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf
-```
 
 | `--miss-hand` | `--max-miss` | Effect |
 |---------------|--------------|--------|

@@ -17,18 +17,10 @@ cd eqtl && make -j
 ## 推荐使用plink文件
 plink2 --vcf data/smoke.vcf.gz --make-bed --out data/smoke --allow-extra-chr
 gcta64 --bfile data/smoke --make-grm --out data/smoke_grm
-
-./eqtl -v data/smoke.vcf.gz -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis --miss-hand impute -o data/out
-
-./eqtl -b data/smoke -e data/smoke.pheno.tsv -g data/smoke.gff \
-  -k data/smoke_grm --model lmm --mode cis --miss-hand impute --maf 0.05 \
-  -o data/out_bed
-```
-
-```bash
+## 计算PEER因子
+eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
 ## 用 PEER 因子作为协变量
-./eqtl -b data/smoke -e data/smoke.pheno.tsv -c peer_factors.tsv -g data/smoke.gff \
+./eqtl -b data/smoke -e data/counts.tsv -c peer_factors.tsv -g data/smoke.gff \
   -k data/smoke_grm --model lmm --mode cis -o out
 ```
 
@@ -96,12 +88,6 @@ eqtl fission -e data/counts.tsv --peer-factors 15 --seed 42 -o fiss
 |------|------|
 | `--vcf` | VCF/BCF，字段 **GT** |
 | `--bfile` | PLINK `.bed`/`.bim`/`.fam` |
-
-```bash
-bcftools index -t panel.vcf.gz
-# 或
-bcftools view -Ob -o panel.bcf panel.vcf.gz && bcftools index panel.bcf
-```
 
 | `--miss-hand` | `--max-miss` | 效果 |
 |---------------|--------------|------|
