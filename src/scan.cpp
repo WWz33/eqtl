@@ -594,45 +594,70 @@ static void apply_lmm_hit(GeneLmmJob& job, AssocHit& h, const SnpRec& snp, doubl
   }
 }
 
-// Wald on spectral space with precomputed g_til (same as test_lmm core)
-static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, double maf_sub) {
+// Workspace for LMM Wald — hoist out of per-gene / per-SNP loops
+struct LmmTestWs {
+  Eigen::MatrixXd Xg;
+  Eigen::MatrixXd XtDX;
+  Eigen::VectorXd XtDy, beta, e, cov_col, fit, resid, yc;
+};
+
+// Wald on spectral space with precomputed g_til (same math as test_lmm)
+static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, double maf_sub,
+                              LmmTestWs& ws) {
   AssocHit h;
   h.n = prep.n;
   h.maf = maf_sub;
-  Eigen::MatrixXd Xg(prep.n, prep.p + 1);
-  Xg.leftCols(prep.p) = prep.X_til;
-  Xg.col(prep.p) = g_til;
+  const int p1 = prep.p + 1;
+  if (ws.Xg.rows() != prep.n || ws.Xg.cols() != p1) ws.Xg.resize(prep.n, p1);
+  ws.Xg.leftCols(prep.p) = prep.X_til;
+  ws.Xg.col(prep.p) = g_til;
   const Eigen::VectorXd& dinv = prep.dinv;
   const double g_wss = g_til.dot(dinv.asDiagonal() * g_til);
   if (g_wss < 1e-12) {
     h.p = 1.0;
     return h;
   }
-  Eigen::MatrixXd XtDX = Xg.transpose() * dinv.asDiagonal() * Xg;
-  Eigen::VectorXd XtDy = Xg.transpose() * (dinv.asDiagonal() * prep.y_til);
-  Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+  if (ws.XtDX.rows() != p1 || ws.XtDX.cols() != p1) ws.XtDX.resize(p1, p1);
+  if (ws.XtDy.size() != p1) ws.XtDy.resize(p1);
+  ws.XtDX.noalias() = ws.Xg.transpose() * dinv.asDiagonal() * ws.Xg;
+  ws.XtDy.noalias() = ws.Xg.transpose() * (dinv.asDiagonal() * prep.y_til);
+  Eigen::LDLT<Eigen::MatrixXd> ldlt(ws.XtDX);
   if (ldlt.info() != Eigen::Success) {
     h.p = 1.0;
     return h;
   }
-  const Eigen::VectorXd beta = ldlt.solve(XtDy);
-  h.beta = beta(prep.p);
+  ws.beta = ldlt.solve(ws.XtDy);
+  h.beta = ws.beta(prep.p);
   const int df = prep.n - prep.p - 1;
-  double q = prep.y_til.dot(dinv.asDiagonal() * prep.y_til) - XtDy.dot(beta);
+  double q = prep.y_til.dot(dinv.asDiagonal() * prep.y_til) - ws.XtDy.dot(ws.beta);
   if (q < 0) q = 0;
   const double sigma2 = (df > 0) ? (q / df) : 1.0;
-  Eigen::VectorXd e = Eigen::VectorXd::Zero(prep.p + 1);
-  e(prep.p) = 1.0;
-  const Eigen::VectorXd cov_col = ldlt.solve(e);
-  h.se = std::sqrt(std::max(sigma2 * cov_col(prep.p), 0.0));
+  if (ws.e.size() != p1) ws.e = Eigen::VectorXd::Zero(p1);
+  else ws.e.setZero();
+  ws.e(prep.p) = 1.0;
+  ws.cov_col = ldlt.solve(ws.e);
+  h.se = std::sqrt(std::max(sigma2 * ws.cov_col(prep.p), 0.0));
   h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
   h.p = p_from_t(h.stat, df);
-  const Eigen::VectorXd fit = Xg * beta;
-  const Eigen::VectorXd resid = prep.y_til - fit;
-  const double tss = prep.y_til.dot(dinv.asDiagonal() * prep.y_til);
-  const double rss = resid.dot(dinv.asDiagonal() * resid);
-  h.r2 = (tss > 0) ? std::max(0.0, 1.0 - rss / tss) : 0.0;
+  // match test_lmm weighted residual r²
+  ws.fit.noalias() = ws.Xg * ws.beta;
+  ws.resid = prep.y_til - ws.fit;
+  const double wss_res = ws.resid.dot(dinv.asDiagonal() * ws.resid);
+  const double ymean = (dinv.dot(prep.y_til)) / dinv.sum();
+  ws.yc = prep.y_til.array() - ymean;
+  const double wss_tot = ws.yc.dot(dinv.asDiagonal() * ws.yc);
+  h.r2 = (wss_tot > 1e-15) ? std::max(0.0, 1.0 - wss_res / wss_tot) : 0.0;
   return h;
+}
+
+// Free GRM/basis after prep — only spectral prep fields needed for tests
+static void free_lmm_gene_raw(GeneLmmJob& j) {
+  j.gr.y.resize(0);
+  j.gr.X.resize(0, 0);
+  j.gr.K.resize(0, 0);
+  j.gr.basis.Q.resize(0, 0);
+  j.gr.basis.lambda.resize(0);
+  j.gr.has_basis = false;
 }
 
 template <typename G>
@@ -652,6 +677,7 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
   for (auto& j : jobs) {
     if (j.gr.has_basis) j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.basis, opt.fast);
     else j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.K, opt.fast);
+    free_lmm_gene_raw(j);
     j.best.p = 2.0;
     j.summary.gene = j.gene;
     j.summary.n_tested = 0;
@@ -662,31 +688,40 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     }
   }
 
+  LmmTestWs ws;
+  Eigen::VectorXd g_buf, g_til;
+
   if (same_keep) {
-    const auto& keep = jobs[0].gr.keep;
-    // shared Q from first prep (same keep → same K/basis)
+    // one shared Q (n×n); drop copies on other genes — OOM guard for G×n²
+    for (size_t i = 1; i < jobs.size(); ++i) jobs[i].prep.Q.resize(0, 0);
     const Eigen::MatrixXd& Q = jobs[0].prep.Q;
+    const auto& keep = jobs[0].gr.keep;
+    const int n = static_cast<int>(keep.size());
+    g_buf.resize(n);
+    g_til.resize(n);
+
     geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
-      Eigen::VectorXd g(static_cast<int>(keep.size()));
       for (size_t r = 0; r < keep.size(); ++r) {
         const int i = keep[r];
-        g(static_cast<int>(r)) =
+        g_buf(static_cast<int>(r)) =
             (i >= 0 && static_cast<size_t>(i) < snp.dosage.size())
                 ? snp.dosage[static_cast<size_t>(i)]
                 : std::numeric_limits<double>::quiet_NaN();
       }
       double maf_sub = snp.maf;
-      if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) return true;
-      const Eigen::VectorXd g_til = Q.transpose() * g;
+      if (!std::isfinite(subset_maf_or_nan(g_buf, &maf_sub))) return true;
+      g_til.noalias() = Q.transpose() * g_buf;
       for (auto& job : jobs) {
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
-        AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub);
+        AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws);
         apply_lmm_hit(job, h, snp, pthr, out);
       }
       return true;
     });
+    // Q only needed for g_til; free after scan
+    jobs[0].prep.Q.resize(0, 0);
   } else {
-    // ponytail: one I/O; per-gene keep/Q (no shared g_til)
+    // one I/O; per-gene Q retained (heterogeneous keep)
     geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
       for (auto& job : jobs) {
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
