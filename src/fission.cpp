@@ -297,6 +297,10 @@ int run_fission(const Options& opt) {
   write_tsv(y2_path, Y2, P.sample_ids, P.gene_ids);
   info("fission: wrote " + y2_path);
 
+  const std::string y1_path = opt.out + ".Y1.tsv";
+  write_tsv(y1_path, Y1, P.sample_ids, P.gene_ids);
+  info("fission: wrote " + y1_path);
+
   std::vector<std::string> factor_names;
   factor_names.reserve(static_cast<size_t>(opt.peer_factors));
   for (int k = 0; k < opt.peer_factors; ++k)

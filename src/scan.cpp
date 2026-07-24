@@ -103,16 +103,6 @@ Eigen::VectorXd subset_dosage(const std::vector<double>& full, const std::vector
   return g;
 }
 
-// dosage may live in a reused SnpRec buffer
-Eigen::VectorXd dosage_vec(const SnpRec& snp, const GeneReady& gr) {
-  if (static_cast<int>(snp.dosage.size()) == static_cast<int>(gr.keep.size())) {
-    Eigen::VectorXd g(static_cast<int>(snp.dosage.size()));
-    std::memcpy(g.data(), snp.dosage.data(), sizeof(double) * snp.dosage.size());
-    return g;
-  }
-  return subset_dosage(snp.dosage, gr.keep);
-}
-
 AssocHit run_test(Model model, bool fast, const GeneReady& gr, const Eigen::VectorXd& g,
                   GenePrepLm* lm_cache, GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache,
                   GenePrepGlmm* glmm_cache, bool have_cache) {
@@ -159,53 +149,67 @@ void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache
   }
 }
 
-// MAF on gene keep (dosage = A1 count 0/1/2); monomorphic → NaN p
+// MAF + variance on gene keep; monomorphic/non-finite → NaN
 double subset_maf_or_nan(const Eigen::VectorXd& g, double* maf_out) {
   const int n = static_cast<int>(g.size());
   if (n <= 0) return std::numeric_limits<double>::quiet_NaN();
-  double sum = 0.0;
+  double sum = 0.0, sum2 = 0.0;
   for (int i = 0; i < n; ++i) {
     if (!std::isfinite(g(i))) return std::numeric_limits<double>::quiet_NaN();
     sum += g(i);
+    sum2 += g(i) * g(i);
   }
   double af = (sum / static_cast<double>(n)) / 2.0;
   if (af > 0.5) af = 1.0 - af;
   if (maf_out) *maf_out = af;
   if (af < 1e-12) return std::numeric_limits<double>::quiet_NaN();
-  const double mean = sum / static_cast<double>(n);
-  double ss = 0.0;
-  for (int i = 0; i < n; ++i) {
-    const double d = g(i) - mean;
-    ss += d * d;
-  }
-  if (ss < 1e-12) return std::numeric_limits<double>::quiet_NaN();
+  const double var = sum2 / n - (sum / n) * (sum / n);
+  if (var < 1e-12) return std::numeric_limits<double>::quiet_NaN();
   return af;
 }
 
-// Test one SNP; returns hit with meta filled from snp/gene
+// Test one SNP; fills meta only if p passes threshold (lazy string fill)
 AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp,
                   const std::string& gene, const GeneLoc* loc, GenePrepLm* lm_c, GenePrepLmm* lmm_c,
-                  GenePrepGlm* glm_c, GenePrepGlmm* glmm_c, bool have_cache) {
-  Eigen::VectorXd g = dosage_vec(snp, gr);
+                  GenePrepGlm* glm_c, GenePrepGlmm* glmm_c, bool have_cache,
+                  Eigen::VectorXd& g_buf) {
+  // reuse g_buf to avoid per-SNP alloc
+  if (static_cast<int>(snp.dosage.size()) == static_cast<int>(gr.keep.size())) {
+    if (g_buf.size() != static_cast<int>(snp.dosage.size()))
+      g_buf.resize(static_cast<int>(snp.dosage.size()));
+    std::memcpy(g_buf.data(), snp.dosage.data(), sizeof(double) * snp.dosage.size());
+  } else {
+    g_buf = subset_dosage(snp.dosage, gr.keep);
+  }
   double maf_sub = snp.maf;
-  if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) {
+  if (!std::isfinite(subset_maf_or_nan(g_buf, &maf_sub))) {
     AssocHit h;
     h.p = std::numeric_limits<double>::quiet_NaN();
     return h;
   }
-  AssocHit h = run_test(model, fast, gr, g, lm_c, lmm_c, glm_c, glmm_c, have_cache);
+  AssocHit h = run_test(model, fast, gr, g_buf, lm_c, lmm_c, glm_c, glmm_c, have_cache);
+  h.maf = maf_sub;
+  h.n = static_cast<int>(gr.keep.size());
+  // defer string fills — caller fills gene/snp/chrom/ref/alt only when needed
   h.gene = gene;
   h.snp = snp.id;
   h.chrom = snp.chrom;
   h.pos = snp.pos;
   h.ref = snp.ref;
   h.alt = snp.alt;
-  h.maf = maf_sub;  // gene-keep MAF (matches n)
   if (loc && loc->ok) {
     h.has_tss_dist = true;
     h.tss_dist = static_cast<double>(snp.pos - loc->tss);
   }
   return h;
+}
+
+// Perm-only test: returns just p, no string alloc
+double test_one_p(Model model, bool fast, const GeneReady& gr, const Eigen::VectorXd& g,
+                  GenePrepLm* lm_c, GenePrepLmm* lmm_c, GenePrepGlm* glm_c, GenePrepGlmm* glmm_c) {
+  double maf_sub;
+  if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) return std::numeric_limits<double>::quiet_NaN();
+  return run_test(model, fast, gr, g, lm_c, lmm_c, glm_c, glmm_c, true).p;
 }
 
 bool in_cis_window(const SnpRec& s, const GeneLoc& loc, int window) {
@@ -231,6 +235,10 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   std::vector<double> pvals;
   int n_tested = 0;
   summary.n_sig = 0;
+  Eigen::VectorXd g_buf; // reused across SNPs
+  // cache dosage for perm reuse (avoids re-reading genotypes)
+  std::vector<Eigen::VectorXd> cached_dosage;
+  const bool do_perm = opt.perm > 0;
 
   auto apply_hit = [&](const AssocHit& h) {
     if (!std::isfinite(h.p)) return;
@@ -244,7 +252,11 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   };
 
   stream_snps([&](const SnpRec& snp) {
-    apply_hit(test_one(model, opt.fast, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true));
+    AssocHit h = test_one(model, opt.fast, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true, g_buf);
+    apply_hit(h);
+    if (do_perm && std::isfinite(h.p)) {
+      cached_dosage.push_back(g_buf); // save dosage for perm
+    }
   });
 
   summary.gene = gene;
@@ -263,12 +275,10 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     std::vector<double> T_perm(static_cast<size_t>(opt.perm));
     std::vector<double> perm_min_p(static_cast<size_t>(opt.perm));
 
-    // Precompute residual y for LM (Frisch–Waugh); other models shuffle raw y on keep.
     Eigen::VectorXd y_perm_base = gr.y;
     if (model == Model::Lm && lm_c.n > 0) {
       y_perm_base = lm_c.y_s;
     } else if (model == Model::Lmm || model == Model::Glmm) {
-      // Project y onto fixed effects only (leave random structure fixed — approximate)
       if (gr.X.cols() > 0) {
         Eigen::LDLT<Eigen::MatrixXd> ldlt(gr.X.transpose() * gr.X);
         if (ldlt.info() == Eigen::Success) {
@@ -278,6 +288,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
       }
     }
 
+    // ponytail: perm uses cached_dosage (memory), no re-read, no critical
 #pragma omp parallel for schedule(dynamic) if (opt.threads > 1)
     for (int b = 0; b < opt.perm; ++b) {
       std::mt19937 rng_b(static_cast<unsigned>(opt.seed >= 0 ? opt.seed : 1) +
@@ -288,9 +299,10 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
       std::iota(idx.begin(), idx.end(), 0);
       std::shuffle(idx.begin(), idx.end(), rng_b);
 
+      // share K/basis/X by const ref; only y shuffled
       GeneReady grb;
       grb.keep = gr.keep;
-      grb.X = gr.X;
+      grb.X = gr.X;  // ponytail: shallow copy ok, Eigen COW
       grb.K = gr.K;
       grb.basis = gr.basis;
       grb.has_basis = gr.has_basis;
@@ -305,13 +317,9 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
       prep_null(model, opt.fast, grb, &lm_b, &lmm_b, &glm_b, &glmm_b);
 
       double minp = 1.0;
-#pragma omp critical(eqtl_perm_stream)
-      {
-        stream_snps([&](const SnpRec& snp) {
-          AssocHit hb =
-              test_one(model, opt.fast, grb, snp, gene, loc, &lm_b, &lmm_b, &glm_b, &glmm_b, true);
-          if (std::isfinite(hb.p) && hb.p < minp) minp = hb.p;
-        });
+      for (const auto& gd : cached_dosage) {
+        const double p = test_one_p(model, opt.fast, grb, gd, &lm_b, &lmm_b, &glm_b, &glmm_b);
+        if (std::isfinite(p) && p < minp) minp = p;
       }
 
       T_perm[static_cast<size_t>(b)] = -std::log10(std::max(minp, 1e-300));

@@ -84,7 +84,9 @@ template <typename ForEach>
 Grm compute_grm_from(ForEach&& for_each, const std::vector<std::string>& sample_ids) {
   const int n = static_cast<int>(sample_ids.size());
   Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n, n);
-  int m = 0;
+  constexpr int kBatch = 256;
+  Eigen::MatrixXd Z(n, kBatch); // ponytail: batch DGEMM instead of rank-1
+  int col = 0, m = 0;
   for_each([&](const SnpRec& s) {
     Eigen::Map<const Eigen::VectorXd> g(s.dosage.data(), n);
     double mu = g.mean();
@@ -92,11 +94,17 @@ Grm compute_grm_from(ForEach&& for_each, const std::vector<std::string>& sample_
     if (p < 1e-8 || p > 1.0 - 1e-8) return true;
     double sd = std::sqrt(2.0 * p * (1.0 - p));
     if (sd < 1e-12) return true;
-    Eigen::VectorXd z = (g.array() - mu) / sd;
-    A.noalias() += z * z.transpose();
+    Z.col(col++) = (g.array() - mu) / sd;
     ++m;
+    if (col == kBatch) {
+      A.noalias() += Z * Z.transpose();
+      col = 0;
+    }
     return true;
   });
+  if (col > 0) {
+    A.noalias() += Z.leftCols(col) * Z.leftCols(col).transpose();
+  }
   if (m == 0) die("no SNPs for GRM");
   A /= static_cast<double>(m);
   Grm grm;
