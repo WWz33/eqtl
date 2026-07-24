@@ -26,13 +26,7 @@ PhenoData load_pheno(const std::string& path) {
   // header[0] is sample column name (ignored); rest gene ids
   PhenoData P;
   for (size_t i = 1; i < header.size(); ++i) P.gene_ids.push_back(trim(header[i]));
-  // gene id dups: names only (columns are distinct positions; identical names always conflict)
-  {
-    auto keep_g = dedupe_ids(P.gene_ids, [](int, int) { return false; }, "pheno genes");
-    if (static_cast<int>(keep_g.size()) != static_cast<int>(P.gene_ids.size())) {
-      // unreachable: payload_equal always false → die on dup; keep for completeness
-    }
-  }
+  assert_unique_ids(P.gene_ids, "pheno genes");
 
   std::vector<std::string> raw_ids;
   std::vector<std::vector<double>> rows;

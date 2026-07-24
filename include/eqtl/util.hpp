@@ -40,9 +40,11 @@ std::vector<std::string> intersect_order(
     const std::vector<std::string>& prefer_order,
     const std::vector<std::string>& other);
 
-// Duplicate IDs: keep first. Same id + same payload → warn; same id + different payload → die.
-// payload_equal(i,j): true if row/col i matches j (id-only: always true).
-// Returns keep indices into original order.
+// Die on any duplicate id (genotype columns / gene names).
+void assert_unique_ids(const std::vector<std::string>& ids, const std::string& what);
+
+// Table rows: same id + same payload → warn, keep first; conflicting payload → die.
+// Returns keep indices.
 std::vector<int> dedupe_ids(const std::vector<std::string>& ids,
                             const std::function<bool(int, int)>& payload_equal,
                             const std::string& what);

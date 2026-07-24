@@ -70,8 +70,7 @@ void VcfSession::open(const std::string& path) {
   samples_.clear();
   samples_.reserve(ns);
   for (int i = 0; i < ns; ++i) samples_.emplace_back(hdr->samples[i]);
-  // VCF sample columns are fixed — duplicate IDs fatal
-  (void)dedupe_ids(samples_, [](int, int) { return false; }, "VCF samples");
+  assert_unique_ids(samples_, "VCF samples");
   contigs_.clear();
   for (int i = 0; i < hdr->n[BCF_DT_CTG]; ++i)
     contigs_.emplace_back(hdr->id[BCF_DT_CTG][i].key);

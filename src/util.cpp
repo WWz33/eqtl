@@ -3,6 +3,7 @@
 #include <iostream>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <cctype>
 #include <limits>
@@ -146,6 +147,15 @@ double p_from_t(double t, double df) {
   return std::min(1.0, std::max(0.0, p));
 }
 
+
+void assert_unique_ids(const std::vector<std::string>& ids, const std::string& what) {
+  std::unordered_set<std::string> seen;
+  seen.reserve(ids.size() * 2);
+  for (const auto& id : ids) {
+    if (!seen.insert(id).second)
+      die(what + ": duplicate id: " + id);
+  }
+}
 
 std::vector<int> dedupe_ids(const std::vector<std::string>& ids,
                             const std::function<bool(int, int)>& payload_equal,

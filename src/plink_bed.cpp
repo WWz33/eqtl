@@ -1,6 +1,7 @@
 #define _FILE_OFFSET_BITS 64
 /* eqtl — PLINK bed: sequential block fread + 2-bit lookup + buffer reuse */
 #include "eqtl/plink_bed.hpp"
+#include <unordered_set>
 #include "eqtl/util.hpp"
 #include <cmath>
 #include <limits>
@@ -35,8 +36,7 @@ void PlinkBed::read_fam(const std::string& path) {
     samples_.push_back(t[1]);
   }
   if (samples_.empty()) die("empty fam: " + path);
-  // bed columns align 1:1 with fam rows — cannot drop; duplicate IID is fatal
-  (void)dedupe_ids(samples_, [](int, int) { return false; }, "plink fam IID");
+  assert_unique_ids(samples_, "plink fam IID");
   n_file_ = samples_.size();
 }
 
@@ -59,12 +59,21 @@ void PlinkBed::read_bim(const std::string& path) {
     sites_.push_back(std::move(s));
   }
   if (sites_.empty()) die("empty bim: " + path);
+  // ponytail: string key once at load; die on identical chrom:pos:A1:A2
   {
-    std::vector<std::string> keys;
-    keys.reserve(sites_.size());
-    for (const auto& s : sites_)
-      keys.push_back(s.chrom + ":" + std::to_string(s.pos) + ":" + s.a1 + ":" + s.a2);
-    (void)dedupe_ids(keys, [](int, int) { return false; }, "plink bim site");
+    std::unordered_set<std::string> seen;
+    seen.reserve(sites_.size() * 2);
+    for (const auto& s : sites_) {
+      std::string k;
+      k.reserve(s.chrom.size() + s.a1.size() + s.a2.size() + 24);
+      k.append(s.chrom).push_back('\t');
+      k.append(std::to_string(s.pos)).push_back('\t');
+      k.append(s.a1).push_back('\t');
+      k.append(s.a2);
+      if (!seen.insert(std::move(k)).second)
+        die("plink bim site: duplicate id: " + s.chrom + ":" + std::to_string(s.pos) + ":" + s.a1 +
+            ":" + s.a2);
+    }
   }
 }
 
