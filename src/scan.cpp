@@ -896,7 +896,9 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     else j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.K, opt.fast);
     // stage-2 needs basis; free only when no perm
     if (opt.perm == 0) free_lmm_gene_raw(j);
-    else j.gr.K.resize(0, 0); // drop K copy; keep y/X/basis
+    else {
+      j.gr.K.resize(0, 0); // keep y/X; stage-2 uses ext_basis when same_keep
+    }
     j.best.p = 2.0;
     j.summary.gene = j.gene;
     j.summary.n_tested = 0;
@@ -1002,6 +1004,12 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     job.summary.acat_p = job.acat_acc.p();
     if (job.best.p <= pthr && job.best.p <= 1.0) {
       write_pair_line(out.top, job.best, Model::Lmm, scope);
+    }
+    if (opt.perm > 0)
+      stage2_perm_topk(opt, Model::Lmm, job, have_shared_basis ? &shared_basis : nullptr);
+    else {
+      job.summary.p_emp = std::numeric_limits<double>::quiet_NaN();
+      job.summary.p_beta = std::numeric_limits<double>::quiet_NaN();
     }
   }
 }
