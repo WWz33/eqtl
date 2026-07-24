@@ -5,6 +5,7 @@
 #include <htslib/hts.h>
 #include <htslib/tbx.h>
 #include <htslib/bgzf.h>
+#include <htslib/thread_pool.h>
 #include <cmath>
 #include <limits>
 #include <cstdlib>
@@ -20,9 +21,27 @@ VcfSession::~VcfSession() {
   if (idx_) hts_idx_destroy(static_cast<hts_idx_t*>(idx_));
   if (hdr_) bcf_hdr_destroy(static_cast<bcf_hdr_t*>(hdr_));
   if (fp_) hts_close(static_cast<htsFile*>(fp_));
+  if (tpool_) hts_tpool_destroy(static_cast<hts_tpool*>(tpool_));
   gt_ = nullptr;
   ngt_ = 0;
-  rec_ = tbx_ = idx_ = hdr_ = fp_ = nullptr;
+  rec_ = tbx_ = idx_ = hdr_ = fp_ = tpool_ = nullptr;
+}
+
+void VcfSession::set_threads(int n) {
+  if (n <= 1 || !fp_) return;
+  auto* pool = hts_tpool_init(n);
+  if (!pool) {
+    warn("hts_tpool_init failed; single-threaded VCF I/O");
+    return;
+  }
+  htsThreadPool p{pool, 0};
+  if (hts_set_thread_pool(static_cast<htsFile*>(fp_), &p) < 0) {
+    warn("hts_set_thread_pool failed; single-threaded VCF I/O");
+    hts_tpool_destroy(pool);
+    return;
+  }
+  tpool_ = pool;
+  info("vcf: BGZF decompress threads=" + std::to_string(n));
 }
 
 void VcfSession::open(const std::string& path) {
@@ -184,7 +203,7 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   if (rec->d.id && rec->d.id[0] && std::strcmp(rec->d.id, ".") != 0)
     out.id = rec->d.id;
   else
-    out.id = out.chrom + ":" + std::to_string(out.pos) + ":" + out.ref + ":" + out.alt;
+    out.id.clear(); // fill_snp_id on write path
   return true;
 }
 

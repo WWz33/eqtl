@@ -79,7 +79,7 @@ void PlinkBed::open_bed(const std::string& path) {
   }
   bed_fp_ = std::fopen(path.c_str(), "rb");
   if (!bed_fp_) die("cannot open " + path);
-  file_buf_.assign(1 << 20, 0);
+  file_buf_.assign(4 << 20, 0); // 4MB stdio buffer
   std::setvbuf(bed_fp_, file_buf_.data(), _IOFBF, file_buf_.size());
 
   unsigned char magic[3];
@@ -87,7 +87,9 @@ void PlinkBed::open_bed(const std::string& path) {
   if (magic[0] != 0x6c || magic[1] != 0x1b) die("not a PLINK1 .bed (bad magic): " + path);
   if (magic[2] != 0x01) die("only SNP-major PLINK .bed is supported: " + path);
   bytes_per_snp_ = (n_file_ + 3) / 4;
-  block_buf_.assign(kBlockSnps * bytes_per_snp_, 0);
+  // ponytail: cap block by ~4MB; floor 4096 SNPs
+  block_snps_ = std::max(kMinBlockSnps, kTargetBlockBytes / std::max<size_t>(bytes_per_snp_, 1));
+  block_buf_.assign(block_snps_ * bytes_per_snp_, 0);
 
   if (std::fseek(bed_fp_, 0, SEEK_END) != 0) die("bed seek end failed: " + path);
   const long fsz = std::ftell(bed_fp_);
@@ -191,7 +193,7 @@ bool PlinkBed::for_each_range_pos(size_t lo, size_t hi, int64_t p0, int64_t p1,
 
   size_t t = lo;
   while (t < hi) {
-    const size_t n_take = std::min(kBlockSnps, hi - t);
+    const size_t n_take = std::min(block_snps_, hi - t);
     const size_t nbytes = n_take * bytes_per_snp_;
     if (std::fread(block_buf_.data(), 1, nbytes, bed_fp_) != nbytes) {
       die("bed fread short at SNP " + std::to_string(t));

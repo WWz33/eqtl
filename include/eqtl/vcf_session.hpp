@@ -38,6 +38,9 @@ public:
   const std::vector<std::string>& contigs() const { return contigs_; }
   bool has_index() const { return indexed_; }
 
+  // BGZF decompress pool (n<=1 no-op). Call after open().
+  void set_threads(int n);
+
   void set_sample_order(const std::vector<std::string>& sample_ids);
 
   // maf_min: GCTA/GEMMA-style keep if maf_min <= MAF <= 1-maf_min; 0 = off
@@ -57,6 +60,7 @@ private:
   void* hdr_ = nullptr;  // bcf_hdr_t*
   void* tbx_ = nullptr;  // tbx_t*
   void* idx_ = nullptr;  // hts_idx_t* (CSI/BCF)
+  void* tpool_ = nullptr; // hts_tpool*
   void* rec_ = nullptr;  // bcf1_t* reused
   int32_t* gt_ = nullptr;
   int ngt_ = 0;

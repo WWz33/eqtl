@@ -774,6 +774,7 @@ int run_eqtl(const Options& opt) {
 
   VcfSession vcf;
   vcf.open(opt.vcf);
+  vcf.set_threads(opt.threads);
   std::vector<std::string> sample_order = intersect_order(ph.sample_ids, vcf.samples());
   if (sample_order.empty()) die("no overlapping samples between pheno and VCF");
   info("overlap samples: " + std::to_string(sample_order.size()));

@@ -47,7 +47,8 @@ public:
                                   const MissPolicy& miss, double maf_min);
 
 private:
-  static constexpr size_t kBlockSnps = 4096;
+  static constexpr size_t kMinBlockSnps = 4096;
+  static constexpr size_t kTargetBlockBytes = 4 << 20; // ~4MB SNP block
 
   std::string prefix_;
   FILE* bed_fp_ = nullptr;
@@ -55,6 +56,7 @@ private:
   std::vector<BimSite> sites_;
   size_t n_file_ = 0;
   size_t bytes_per_snp_ = 0;
+  size_t block_snps_ = kMinBlockSnps;
   std::vector<int> sample_col_;
   std::vector<uint8_t> block_buf_;
   std::vector<char> file_buf_;
