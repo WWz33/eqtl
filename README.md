@@ -8,20 +8,16 @@
 
 cis/trans eQTL mapping. Models: LM, LMM, NB-GLM, GLMM.
 
-## Install
+## Getting Started
 
 Dependencies: C++17, Eigen 3, htslib, OpenBLAS, OpenMP.
 
 ```bash
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
-```
 
-## Examples
-
-```bash
-# GRM (GCTA-format; or use gcta64 --make-grm directly)
-./eqtl -b panel --make-grm -o panel_grm
+# GRM
+gcta64 --bfile panel --make-grm --out panel_grm
 
 # fission: split counts, estimate PEER factors
 ./eqtl fission -e counts.tsv --peer-factors 15 --seed 42 -o fiss

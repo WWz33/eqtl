@@ -8,20 +8,16 @@
 
 cis/trans eQTL 映射。模型：LM、LMM、NB-GLM、GLMM。
 
-## 安装
+## Getting Started
 
 依赖：C++17、Eigen 3、htslib、OpenBLAS、OpenMP。
 
 ```bash
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
 cd eqtl && make -j
-```
 
-## 示例
-
-```bash
-# GRM（GCTA 格式；也可直接用 gcta64 --make-grm）
-./eqtl -b panel --make-grm -o panel_grm
+# GRM
+gcta64 --bfile panel --make-grm --out panel_grm
 
 # fission：拆分计数矩阵，估计 PEER 因子
 ./eqtl fission -e counts.tsv --peer-factors 15 --seed 42 -o fiss
