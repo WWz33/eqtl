@@ -133,10 +133,10 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
   if (sample_col_.empty() || snp_idx >= sites_.size()) return false;
   const int n_an = static_cast<int>(sample_col_.size());
   if (static_cast<int>(out.dosage.size()) != n_an) out.dosage.resize(static_cast<size_t>(n_an));
-  std::fill(out.dosage.begin(), out.dosage.end(), std::numeric_limits<double>::quiet_NaN());
   int n_miss = 0;
   double sum = 0.0;
   int n_ok = 0;
+  // ponytail: write dosage directly; miss positions set after if needed (skip full NaN memset)
   for (int i = 0; i < n_an; ++i) {
     const int col = sample_col_[static_cast<size_t>(i)];
     if (col < 0 || static_cast<size_t>(col) >= n_file_) return false;
@@ -146,6 +146,7 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
     const int pair = (b >> (2 * j)) & 3;
     const int a1c = pair_lut_[pair];
     if (a1c < 0) {
+      out.dosage[static_cast<size_t>(i)] = std::numeric_limits<double>::quiet_NaN();
       ++n_miss;
       continue;
     }

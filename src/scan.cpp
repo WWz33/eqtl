@@ -551,6 +551,164 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
   }
 }
 
+
+// SNP-outer LMM for trans/gw (perm=0). Same keep → share Q, g_til once per SNP.
+// Different keep → still one genotype pass; per-gene test_lmm.
+struct GeneLmmJob {
+  std::string gene;
+  GeneLoc loc;
+  bool has_loc = false;
+  GeneReady gr;
+  GenePrepLmm prep;
+  GeneSummary summary;
+  AssocHit best;
+  std::vector<double> pvals;
+};
+
+static void fill_hit_meta_lmm(AssocHit& h, const GeneLmmJob& job, const SnpRec& snp) {
+  h.gene = job.gene;
+  h.chrom = snp.chrom;
+  h.pos = snp.pos;
+  h.ref = snp.ref;
+  h.alt = snp.alt;
+  fill_snp_id(h, snp);
+  if (job.has_loc && job.loc.ok) {
+    h.has_tss_dist = true;
+    h.tss_dist = static_cast<double>(snp.pos - job.loc.tss);
+  }
+}
+
+static void apply_lmm_hit(GeneLmmJob& job, AssocHit& h, const SnpRec& snp, double pthr,
+                          ScopeOut& out) {
+  if (!std::isfinite(h.p)) return;
+  ++job.summary.n_tested;
+  job.pvals.push_back(h.p);
+  if (h.p <= pthr) {
+    fill_hit_meta_lmm(h, job, snp);
+    write_pair_line(out.pairs, h, Model::Lmm, out.tag);
+    ++job.summary.n_sig;
+  }
+  if (h.p < job.best.p) {
+    fill_hit_meta_lmm(h, job, snp);
+    job.best = h;
+  }
+}
+
+// Wald on spectral space with precomputed g_til (same as test_lmm core)
+static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, double maf_sub) {
+  AssocHit h;
+  h.n = prep.n;
+  h.maf = maf_sub;
+  Eigen::MatrixXd Xg(prep.n, prep.p + 1);
+  Xg.leftCols(prep.p) = prep.X_til;
+  Xg.col(prep.p) = g_til;
+  const Eigen::VectorXd& dinv = prep.dinv;
+  const double g_wss = g_til.dot(dinv.asDiagonal() * g_til);
+  if (g_wss < 1e-12) {
+    h.p = 1.0;
+    return h;
+  }
+  Eigen::MatrixXd XtDX = Xg.transpose() * dinv.asDiagonal() * Xg;
+  Eigen::VectorXd XtDy = Xg.transpose() * (dinv.asDiagonal() * prep.y_til);
+  Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+  if (ldlt.info() != Eigen::Success) {
+    h.p = 1.0;
+    return h;
+  }
+  const Eigen::VectorXd beta = ldlt.solve(XtDy);
+  h.beta = beta(prep.p);
+  const int df = prep.n - prep.p - 1;
+  double q = prep.y_til.dot(dinv.asDiagonal() * prep.y_til) - XtDy.dot(beta);
+  if (q < 0) q = 0;
+  const double sigma2 = (df > 0) ? (q / df) : 1.0;
+  Eigen::VectorXd e = Eigen::VectorXd::Zero(prep.p + 1);
+  e(prep.p) = 1.0;
+  const Eigen::VectorXd cov_col = ldlt.solve(e);
+  h.se = std::sqrt(std::max(sigma2 * cov_col(prep.p), 0.0));
+  h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
+  h.p = p_from_t(h.stat, df);
+  const Eigen::VectorXd fit = Xg * beta;
+  const Eigen::VectorXd resid = prep.y_til - fit;
+  const double tss = prep.y_til.dot(dinv.asDiagonal() * prep.y_til);
+  const double rss = resid.dot(dinv.asDiagonal() * resid);
+  h.r2 = (tss > 0) ? std::max(0.0, 1.0 - rss / tss) : 0.0;
+  return h;
+}
+
+template <typename G>
+void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double maf,
+                        const std::string& scope, ScopeOut& out, double pthr,
+                        std::vector<GeneLmmJob>& jobs) {
+  if (jobs.empty()) return;
+
+  bool same_keep = true;
+  for (size_t i = 1; i < jobs.size(); ++i) {
+    if (jobs[i].gr.keep != jobs[0].gr.keep) {
+      same_keep = false;
+      break;
+    }
+  }
+
+  for (auto& j : jobs) {
+    if (j.gr.has_basis) j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.basis, opt.fast);
+    else j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.K, opt.fast);
+    j.best.p = 2.0;
+    j.summary.gene = j.gene;
+    j.summary.n_tested = 0;
+    j.summary.n_sig = 0;
+    if (j.has_loc && j.loc.ok) {
+      j.summary.chrom = j.loc.chrom;
+      j.summary.tss = j.loc.tss;
+    }
+  }
+
+  if (same_keep) {
+    const auto& keep = jobs[0].gr.keep;
+    // shared Q from first prep (same keep → same K/basis)
+    const Eigen::MatrixXd& Q = jobs[0].prep.Q;
+    geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
+      Eigen::VectorXd g(static_cast<int>(keep.size()));
+      for (size_t r = 0; r < keep.size(); ++r) {
+        const int i = keep[r];
+        g(static_cast<int>(r)) =
+            (i >= 0 && static_cast<size_t>(i) < snp.dosage.size())
+                ? snp.dosage[static_cast<size_t>(i)]
+                : std::numeric_limits<double>::quiet_NaN();
+      }
+      double maf_sub = snp.maf;
+      if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) return true;
+      const Eigen::VectorXd g_til = Q.transpose() * g;
+      for (auto& job : jobs) {
+        if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
+        AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub);
+        apply_lmm_hit(job, h, snp, pthr, out);
+      }
+      return true;
+    });
+  } else {
+    // ponytail: one I/O; per-gene keep/Q (no shared g_til)
+    geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
+      for (auto& job : jobs) {
+        if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
+        Eigen::VectorXd g = subset_dosage(snp.dosage, job.gr.keep);
+        double maf_sub = snp.maf;
+        if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) continue;
+        AssocHit h = test_lmm(job.prep, g);
+        h.maf = maf_sub;
+        apply_lmm_hit(job, h, snp, pthr, out);
+      }
+      return true;
+    });
+  }
+
+  for (auto& job : jobs) {
+    job.summary.acat_p = acat(job.pvals);
+    if (job.best.p <= pthr && job.best.p <= 1.0) {
+      write_pair_line(out.top, job.best, Model::Lmm, scope);
+    }
+  }
+}
+
 int run_make_grm(const Options& opt) {
   MissPolicy mp{opt.miss, opt.max_miss};
   const double maf = opt.maf;
@@ -658,10 +816,11 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       const double pthr = (scope == "cis") ? opt.pval_cis : opt.pval_trans;
       std::vector<GeneSummary> summaries;
 
-      // LM trans/gw, no perm: SNP-outer (I/O once). Else gene-outer.
-      const bool snp_outer = (model == Model::Lm && opt.perm == 0 &&
-                              (scope == "trans" || scope == "gw"));
-      if (snp_outer) {
+      // LM/LMM trans/gw, no perm: SNP-outer (I/O once). Else gene-outer.
+      const bool snp_outer =
+          opt.perm == 0 && (scope == "trans" || scope == "gw") &&
+          (model == Model::Lm || model == Model::Lmm);
+      if (snp_outer && model == Model::Lm) {
         std::vector<GeneLmJob> jobs;
         jobs.reserve(ph.gene_ids.size());
         for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
@@ -688,6 +847,35 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         }
         info("trans/gw LM: SNP-outer (" + std::to_string(jobs.size()) + " genes)");
         scan_lm_snp_outer(opt, geno, mp, maf, scope, so, pthr, jobs);
+        summaries.reserve(jobs.size());
+        for (auto& j : jobs) summaries.push_back(std::move(j.summary));
+      } else if (snp_outer && model == Model::Lmm) {
+        std::vector<GeneLmmJob> jobs;
+        jobs.reserve(ph.gene_ids.size());
+        for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
+          const std::string& gene = ph.gene_ids[gi];
+          Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
+          GeneLoc loc_store;
+          bool has_loc = false;
+          if (have_gff) {
+            auto it = annot.find(gene);
+            if (it != annot.end()) {
+              loc_store = it->second;
+              has_loc = true;
+            } else if (scope != "gw") {
+              continue;
+            }
+          }
+          if (scope == "trans" && !has_loc) continue;
+          GeneLmmJob job;
+          job.gene = gene;
+          job.loc = loc_store;
+          job.has_loc = has_loc;
+          if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, job.gr)) continue;
+          jobs.push_back(std::move(job));
+        }
+        info("trans/gw LMM: SNP-outer (" + std::to_string(jobs.size()) + " genes)");
+        scan_lmm_snp_outer(opt, geno, mp, maf, scope, so, pthr, jobs);
         summaries.reserve(jobs.size());
         for (auto& j : jobs) summaries.push_back(std::move(j.summary));
       } else {
