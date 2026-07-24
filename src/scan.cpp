@@ -254,10 +254,9 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   int n_tested = 0;
   summary.n_sig = 0;
   Eigen::VectorXd g_buf;
-  // perm: cache only SNPs with p <= max(pthr, 0.05) — O(M) worst-case avoided
+  // perm: cache every tested dosage (exact min-p over full SNP set; O(M×n) when perm>0)
   std::vector<Eigen::VectorXd> cached_dosage;
   const bool do_perm = opt.perm > 0;
-  const double perm_cache_thr = std::max(pthr, 0.05);
 
   auto apply_hit = [&](AssocHit& h, const SnpRec& snp) {
     if (!std::isfinite(h.p)) return;
@@ -277,7 +276,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   stream_snps([&](const SnpRec& snp) {
     AssocHit h = test_one(model, opt.fast, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true, g_buf);
     apply_hit(h, snp);
-    if (do_perm && std::isfinite(h.p) && h.p <= perm_cache_thr) {
+    if (do_perm && std::isfinite(h.p)) {
       cached_dosage.push_back(g_buf);
     }
   });
@@ -468,20 +467,30 @@ static void fill_hit_meta(AssocHit& h, const Job& job, const SnpRec& snp) {
   }
 }
 
+// per-job stats (thread-safe if each job owned by one thread); file write separate
 template <typename Job>
-static void apply_snp_hit(Job& job, AssocHit& h, const SnpRec& snp, double pthr, Model model,
-                          ScopeOut& out) {
-  if (!std::isfinite(h.p)) return;
+static bool apply_snp_hit_stats(Job& job, AssocHit& h, const SnpRec& snp, double pthr) {
+  if (!std::isfinite(h.p)) return false;
   ++job.summary.n_tested;
   job.acat_acc.add(h.p);
+  bool write_pair = false;
   if (h.p <= pthr) {
     fill_hit_meta(h, job, snp);
-    write_pair_line(out.pairs, h, model, out.tag);
     ++job.summary.n_sig;
+    write_pair = true;
   }
   if (h.p < job.best.p) {
     fill_hit_meta(h, job, snp);
     job.best = h;
+  }
+  return write_pair;
+}
+
+template <typename Job>
+static void apply_snp_hit(Job& job, AssocHit& h, const SnpRec& snp, double pthr, Model model,
+                          ScopeOut& out) {
+  if (apply_snp_hit_stats(job, h, snp, pthr)) {
+    write_pair_line(out.pairs, h, model, out.tag);
   }
 }
 
@@ -582,14 +591,16 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
       }
 
       gty.noalias() = Ys * g_s;
-      // ponytail: gene loop OpenMP; pairs write critical (result order may differ across SNPs only)
+      // each job owned by one static-scheduled thread; only file write needs critical
 #pragma omp parallel for schedule(static) if (opt.threads > 1 && Gz > 32) num_threads(opt.threads)
       for (int gi = 0; gi < Gz; ++gi) {
         auto& job = jobs[static_cast<size_t>(gi)];
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
         AssocHit h = hit_from_gty(job.prep, gtg, gty(gi), maf_sub);
+        if (apply_snp_hit_stats(job, h, snp, pthr)) {
 #pragma omp critical(eqtl_pairs)
-        apply_snp_hit(job, h, snp, pthr, Model::Lm, out);
+          write_pair_line(out.pairs, h, Model::Lm, out.tag);
+        }
       }
       return true;
     });
@@ -772,7 +783,6 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       double maf_sub = snp.maf;
       if (!std::isfinite(subset_maf_or_nan(g_buf, &maf_sub))) return true;
       g_til.noalias() = Q.transpose() * g_buf;
-      // per-thread LmmTestWs (ws above is serial fallback)
 #pragma omp parallel if (opt.threads > 1 && jobs.size() > 32) num_threads(opt.threads)
       {
         LmmTestWs ws_t;
@@ -781,8 +791,10 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
           auto& job = jobs[static_cast<size_t>(ji)];
           if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
           AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws_t);
+          if (apply_snp_hit_stats(job, h, snp, pthr)) {
 #pragma omp critical(eqtl_pairs)
-          apply_snp_hit(job, h, snp, pthr, Model::Lmm, out);
+            write_pair_line(out.pairs, h, Model::Lmm, out.tag);
+          }
         }
       }
       return true;
