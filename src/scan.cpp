@@ -12,6 +12,7 @@
 #include <numeric>
 #include <unordered_map>
 #include <cstring>
+#include <utility>
 
 namespace eqtl {
 
@@ -376,6 +377,180 @@ void bh_adjust(std::vector<GeneSummary>& gs) {
 
 }  // namespace
 
+
+// SNP-outer LM for trans/gw (perm=0): one genotype pass. Same-keep → Y_s * g_s.
+// Different keep / perm / non-LM → caller uses gene-outer.
+struct GeneLmJob {
+  std::string gene;
+  GeneLoc loc;
+  bool has_loc = false;
+  GeneReady gr;
+  GenePrepLm prep;
+  GeneSummary summary;
+  AssocHit best;
+  std::vector<double> pvals;
+};
+
+static void fill_hit_meta(AssocHit& h, const GeneLmJob& job, const SnpRec& snp) {
+  h.gene = job.gene;
+  h.chrom = snp.chrom;
+  h.pos = snp.pos;
+  h.ref = snp.ref;
+  h.alt = snp.alt;
+  fill_snp_id(h, snp);
+  if (job.has_loc && job.loc.ok) {
+    h.has_tss_dist = true;
+    h.tss_dist = static_cast<double>(snp.pos - job.loc.tss);
+  }
+}
+
+static void apply_lm_hit(GeneLmJob& job, AssocHit& h, const SnpRec& snp, double pthr,
+                         ScopeOut& out) {
+  if (!std::isfinite(h.p)) return;
+  ++job.summary.n_tested;
+  job.pvals.push_back(h.p);
+  if (h.p <= pthr) {
+    fill_hit_meta(h, job, snp);
+    write_pair_line(out.pairs, h, Model::Lm, out.tag);
+    ++job.summary.n_sig;
+  }
+  if (h.p < job.best.p) {
+    fill_hit_meta(h, job, snp);
+    job.best = h;
+  }
+}
+
+// Residualize g on prep.X (same as test_lm)
+static bool residualize_g(const GenePrepLm& prep, const Eigen::VectorXd& g, Eigen::VectorXd& g_s,
+                          double& gtg) {
+  const Eigen::VectorXd Xt_g = prep.X.transpose() * g;
+  g_s = g - prep.X * (prep.XtX_inv * Xt_g);
+  gtg = g_s.squaredNorm();
+  return gtg >= 1e-12;
+}
+
+static AssocHit hit_from_gty(const GenePrepLm& prep, double gtg, double gty, double maf_sub) {
+  AssocHit h;
+  h.n = prep.n;
+  h.maf = maf_sub;
+  if (gtg < 1e-12) {
+    h.p = 1.0;
+    return h;
+  }
+  h.beta = gty / gtg;
+  const double df = prep.n - prep.p - 1;
+  if (df <= 0) {
+    h.p = 1.0;
+    return h;
+  }
+  const double rss = prep.yty - h.beta * gty;
+  const double s2 = std::max(rss / df, 0.0);
+  h.se = std::sqrt(s2 / gtg);
+  h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
+  h.p = p_from_t(h.stat, df);
+  h.r2 = (prep.yty > 0) ? (1.0 - rss / prep.yty) : 0.0;
+  return h;
+}
+
+template <typename G>
+void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double maf,
+                       const std::string& scope, ScopeOut& out, double pthr,
+                       std::vector<GeneLmJob>& jobs) {
+  if (jobs.empty()) return;
+
+  // shared keep?
+  bool same_keep = true;
+  for (size_t i = 1; i < jobs.size(); ++i) {
+    if (jobs[i].gr.keep != jobs[0].gr.keep) {
+      same_keep = false;
+      break;
+    }
+  }
+
+  for (auto& j : jobs) {
+    j.prep = prep_lm(j.gr.y, j.gr.X);
+    j.best.p = 2.0;
+    j.summary.gene = j.gene;
+    j.summary.n_tested = 0;
+    j.summary.n_sig = 0;
+    if (j.has_loc && j.loc.ok) {
+      j.summary.chrom = j.loc.chrom;
+      j.summary.tss = j.loc.tss;
+    }
+  }
+
+  if (same_keep) {
+    // Y_s: G × n  (rows = residualized phenotypes)
+    const int n = jobs[0].prep.n;
+    const int Gz = static_cast<int>(jobs.size());
+    Eigen::MatrixXd Ys(Gz, n);
+    for (int gi = 0; gi < Gz; ++gi) Ys.row(gi) = jobs[static_cast<size_t>(gi)].prep.y_s.transpose();
+    const auto& keep = jobs[0].gr.keep;
+    const GenePrepLm& prep0 = jobs[0].prep;
+
+    geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
+      // trans: skip cis window per gene separately if needed
+      Eigen::VectorXd g_full(static_cast<int>(keep.size()));
+      for (size_t r = 0; r < keep.size(); ++r) {
+        const int i = keep[r];
+        g_full(static_cast<int>(r)) =
+            (i >= 0 && static_cast<size_t>(i) < snp.dosage.size())
+                ? snp.dosage[static_cast<size_t>(i)]
+                : std::numeric_limits<double>::quiet_NaN();
+      }
+      double maf_sub = snp.maf;
+      if (!std::isfinite(subset_maf_or_nan(g_full, &maf_sub))) return true;
+
+      Eigen::VectorXd g_s;
+      double gtg = 0;
+      if (!residualize_g(prep0, g_full, g_s, gtg)) {
+        // monomorphic residual → p=1 for all genes that accept this SNP
+        for (int gi = 0; gi < Gz; ++gi) {
+          auto& job = jobs[static_cast<size_t>(gi)];
+          if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
+          AssocHit h;
+          h.p = 1.0;
+          h.n = prep0.n;
+          h.maf = maf_sub;
+          apply_lm_hit(job, h, snp, pthr, out);
+        }
+        return true;
+      }
+
+      // gty_i = Ys.row(i) · g_s
+      const Eigen::VectorXd gty = Ys * g_s;
+      for (int gi = 0; gi < Gz; ++gi) {
+        auto& job = jobs[static_cast<size_t>(gi)];
+        if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
+        AssocHit h = hit_from_gty(job.prep, gtg, gty(gi), maf_sub);
+        apply_lm_hit(job, h, snp, pthr, out);
+      }
+      return true;
+    });
+  } else {
+    // different keep: still one I/O pass
+    geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
+      for (auto& job : jobs) {
+        if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
+        Eigen::VectorXd g = subset_dosage(snp.dosage, job.gr.keep);
+        double maf_sub = snp.maf;
+        if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) continue;
+        AssocHit h = test_lm(job.prep, g);
+        h.maf = maf_sub;
+        apply_lm_hit(job, h, snp, pthr, out);
+      }
+      return true;
+    });
+  }
+
+  for (auto& job : jobs) {
+    job.summary.acat_p = acat(job.pvals);
+    if (job.best.p <= pthr && job.best.p <= 1.0) {
+      write_pair_line(out.top, job.best, Model::Lm, scope);
+    }
+  }
+}
+
 int run_make_grm(const Options& opt) {
   MissPolicy mp{opt.miss, opt.max_miss};
   const double maf = opt.maf;
@@ -483,62 +658,96 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       const double pthr = (scope == "cis") ? opt.pval_cis : opt.pval_trans;
       std::vector<GeneSummary> summaries;
 
-      for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
-        const std::string& gene = ph.gene_ids[gi];
-        Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
-
-        if (needs_counts(model) && !looks_like_counts(y)) {
-          warn("skip non-count gene for " + model_str(model) + ": " + gene);
-          continue;
+      // LM trans/gw, no perm: SNP-outer (I/O once). Else gene-outer.
+      const bool snp_outer = (model == Model::Lm && opt.perm == 0 &&
+                              (scope == "trans" || scope == "gw"));
+      if (snp_outer) {
+        std::vector<GeneLmJob> jobs;
+        jobs.reserve(ph.gene_ids.size());
+        for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
+          const std::string& gene = ph.gene_ids[gi];
+          Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
+          GeneLoc loc_store;
+          bool has_loc = false;
+          if (have_gff) {
+            auto it = annot.find(gene);
+            if (it != annot.end()) {
+              loc_store = it->second;
+              has_loc = true;
+            } else if (scope != "gw") {
+              continue;
+            }
+          }
+          if (scope == "trans" && !has_loc) continue;
+          GeneLmJob job;
+          job.gene = gene;
+          job.loc = loc_store;
+          job.has_loc = has_loc;
+          if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, job.gr)) continue;
+          jobs.push_back(std::move(job));
         }
+        info("trans/gw LM: SNP-outer (" + std::to_string(jobs.size()) + " genes)");
+        scan_lm_snp_outer(opt, geno, mp, maf, scope, so, pthr, jobs);
+        summaries.reserve(jobs.size());
+        for (auto& j : jobs) summaries.push_back(std::move(j.summary));
+      } else {
+        for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
+          const std::string& gene = ph.gene_ids[gi];
+          Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
 
-        const GeneLoc* locp = nullptr;
-        GeneLoc loc_store;
-        if (have_gff) {
-          auto it = annot.find(gene);
-          if (it != annot.end()) {
-            loc_store = it->second;
-            locp = &loc_store;
-          } else if (scope != "gw") {
+          if (needs_counts(model) && !looks_like_counts(y)) {
+            warn("skip non-count gene for " + model_str(model) + ": " + gene);
             continue;
           }
-        }
 
-        GeneReady gr;
-        if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
+          const GeneLoc* locp = nullptr;
+          GeneLoc loc_store;
+          if (have_gff) {
+            auto it = annot.find(gene);
+            if (it != annot.end()) {
+              loc_store = it->second;
+              locp = &loc_store;
+            } else if (scope != "gw") {
+              continue;
+            }
+          }
 
-        summaries.emplace_back();
-        GeneSummary& summary = summaries.back();
+          GeneReady gr;
+          if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
 
-        if (scope == "cis") {
-          if (!locp) { summaries.pop_back(); continue; }
-          const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
-          const int64_t cend = locp->tss + opt.window;
-          auto stream = [&](auto&& take) {
-            geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
-              take(s);
-              return true;
-            });
-          };
-          scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
-        } else if (scope == "trans") {
-          if (!locp) { summaries.pop_back(); continue; }
-          auto stream = [&](auto&& take) {
-            geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
-              if (in_cis_window(s, *locp, opt.window)) return true;
-              take(s);
-              return true;
-            });
-          };
-          scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
-        } else {
-          auto stream = [&](auto&& take) {
-            geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
-              take(s);
-              return true;
-            });
-          };
-          scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
+          summaries.emplace_back();
+          GeneSummary& summary = summaries.back();
+
+          if (scope == "cis") {
+            if (!locp) { summaries.pop_back(); continue; }
+            const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
+            const int64_t cend = locp->tss + opt.window;
+            auto stream = [&](auto&& take) {
+              geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
+                take(s);
+                return true;
+              });
+            };
+            scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
+          } else if (scope == "trans") {
+            if (!locp) { summaries.pop_back(); continue; }
+            auto stream = [&](auto&& take) {
+              geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
+                if (in_cis_window(s, *locp, opt.window)) return true;
+                take(s);
+                return true;
+              });
+            };
+            scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
+          } else {
+            auto stream = [&](auto&& take) {
+              geno.for_each_snp(mp, maf, [&](const SnpRec& s) {
+                take(s);
+                return true;
+              });
+            };
+            scan_gene_snps(opt, model, scope, gene, gr, locp, pthr, so, summary, stream);
+          }
         }
       }
       bh_adjust(summaries);
