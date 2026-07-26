@@ -23,6 +23,11 @@ std::string trim(const std::string& s);
 std::string chrom_key(const std::string& chrom);
 bool chrom_equal(const std::string& a, const std::string& b);
 
+// Validate chromosome names match between genotype and annotation.
+// Dies with helpful error if no overlap after chr-prefix normalization.
+void validate_chrom_names(const std::vector<std::string>& geno_chroms,
+                          const std::vector<std::string>& gff_chroms);
+
 // two-sided normal p from |z|
 double pnorm_two_sided(double z);
 double p_from_t(double t, double df);

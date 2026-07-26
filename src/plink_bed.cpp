@@ -41,23 +41,86 @@ void PlinkBed::read_fam(const std::string& path) {
 }
 
 void PlinkBed::read_bim(const std::string& path) {
-  std::ifstream in(path);
-  if (!in) die("cannot open " + path);
+  FILE* fp = std::fopen(path.c_str(), "rb");
+  if (!fp) die("cannot open " + path);
+
   sites_.clear();
-  std::string line;
-  while (std::getline(in, line)) {
-    if (line.empty()) continue;
-    auto t = split_ws(line);
-    if (t.size() < 6) die("malformed bim line: " + path);
+  sites_.reserve(1 << 20);
+
+  // 4MB stdio buffer for fast streaming I/O
+  std::vector<char> file_buf(4 << 20);
+  std::setvbuf(fp, file_buf.data(), _IOFBF, file_buf.size());
+
+  // Line buffer for streaming
+  std::vector<char> line_buf(1024);
+  while (true) {
+    // Read one line
+    if (std::fgets(line_buf.data(), static_cast<int>(line_buf.size()), fp) == nullptr) break;
+    // Grow line buffer if line was truncated (no newline at end)
+    while (line_buf.back() != '\0' && line_buf.back() != '\n' && !std::feof(fp)) {
+      size_t old_sz = line_buf.size();
+      line_buf.resize(old_sz * 2);
+      if (std::fgets(line_buf.data() + old_sz, static_cast<int>(old_sz + 1), fp) == nullptr) break;
+    }
+
+    const char* p = line_buf.data();
+    // Skip leading whitespace
+    while (*p == ' ' || *p == '\t') ++p;
+    // Skip empty lines
+    if (*p == '\n' || *p == '\r' || *p == '\0') continue;
+
+    // Parse 6 fields: chrom id cm pos a1 a2
+    auto read_field = [&]() -> std::string {
+      const char* start = p;
+      while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') ++p;
+      return std::string(start, p);
+    };
+    auto skip_ws = [&]() { while (*p == ' ' || *p == '\t') ++p; };
+    auto parse_int64_checked = [&](const char* field_name) -> int64_t {
+      const char* start = p;
+      int64_t v = 0;
+      bool neg = false;
+      if (*p == '-') { neg = true; ++p; }
+      if (*p < '0' || *p > '9') die("malformed bim " + std::string(field_name) + " in: " + path);
+      while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); ++p; }
+      if (p == start || (p == start + 1 && neg)) die("malformed bim " + std::string(field_name) + " in: " + path);
+      return neg ? -v : v;
+    };
+    auto parse_double_checked = [&](const char* field_name) -> double {
+      const char* start = p;
+      double v = 0;
+      bool neg = false;
+      if (*p == '-') { neg = true; ++p; }
+      if (*p < '0' || *p > '9') die("malformed bim " + std::string(field_name) + " in: " + path);
+      while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); ++p; }
+      if (*p == '.') {
+        ++p;
+        double frac = 1;
+        while (*p >= '0' && *p <= '9') { frac *= 0.1; v += (*p - '0') * frac; ++p; }
+      }
+      if (p == start || (p == start + 1 && neg)) die("malformed bim " + std::string(field_name) + " in: " + path);
+      return neg ? -v : v;
+    };
+
     BimSite s;
-    s.chrom = t[0];
-    s.id = t[1];
-    s.cm = std::stod(t[2]);
-    s.pos = std::stoll(t[3]);
-    s.a1 = t[4];
-    s.a2 = t[5];
+    s.chrom = read_field();
+    skip_ws();
+    s.id = read_field();
+    skip_ws();
+    s.cm = parse_double_checked("cm");
+    skip_ws();
+    s.pos = parse_int64_checked("pos");
+    skip_ws();
+    s.a1 = read_field();
+    skip_ws();
+    s.a2 = read_field();
+
+    if (s.chrom.empty() || s.id.empty() || s.a1.empty() || s.a2.empty())
+      die("malformed bim line in: " + path);
     sites_.push_back(std::move(s));
   }
+  std::fclose(fp);
+
   if (sites_.empty()) die("empty bim: " + path);
   // ponytail: string key once at load; die on identical chrom:pos:A1:A2
   {
@@ -89,6 +152,17 @@ void PlinkBed::build_chrom_ranges() {
     chrom_range_[sites_[i].chrom] = {i, j};
     i = j;
   }
+}
+
+std::vector<std::string> PlinkBed::chromosomes() const {
+  std::vector<std::string> out;
+  if (sites_.empty()) return out;
+  out.push_back(sites_[0].chrom);
+  for (size_t i = 1; i < sites_.size(); ++i) {
+    if (!chrom_equal(sites_[i].chrom, out.back()))
+      out.push_back(sites_[i].chrom);
+  }
+  return out;
 }
 
 void PlinkBed::open_bed(const std::string& path) {

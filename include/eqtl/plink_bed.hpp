@@ -34,6 +34,7 @@ public:
   const std::vector<BimSite>& sites() const { return sites_; }
   size_t n_samples_file() const { return n_file_; }
   size_t n_snps() const { return sites_.size(); }
+  std::vector<std::string> chromosomes() const;
 
   void set_sample_order(const std::vector<std::string>& sample_ids);
 

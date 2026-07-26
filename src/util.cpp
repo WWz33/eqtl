@@ -66,18 +66,51 @@ std::vector<std::string> intersect_order(
 
 
 std::string chrom_key(const std::string& chrom) {
-  if (chrom.size() >= 3) {
-    char c0 = static_cast<char>(std::tolower(static_cast<unsigned char>(chrom[0])));
-    char c1 = static_cast<char>(std::tolower(static_cast<unsigned char>(chrom[1])));
-    char c2 = static_cast<char>(std::tolower(static_cast<unsigned char>(chrom[2])));
-    if (c0 == 'c' && c1 == 'h' && c2 == 'r') return chrom.substr(3);
+  std::string s = chrom;
+  // Strip leading chr/Chr/CHR
+  if (s.size() >= 3) {
+    char c0 = static_cast<char>(std::tolower(static_cast<unsigned char>(s[0])));
+    char c1 = static_cast<char>(std::tolower(static_cast<unsigned char>(s[1])));
+    char c2 = static_cast<char>(std::tolower(static_cast<unsigned char>(s[2])));
+    if (c0 == 'c' && c1 == 'h' && c2 == 'r') s = s.substr(3);
   }
-  return chrom;
+  // Strip leading zeros: 01 -> 1, 020 -> 20
+  size_t start = 0;
+  while (start + 1 < s.size() && s[start] == '0') ++start;
+  if (start > 0) s = s.substr(start);
+  return s;
 }
 
 bool chrom_equal(const std::string& a, const std::string& b) {
   if (a == b) return true;
   return chrom_key(a) == chrom_key(b);
+}
+
+void validate_chrom_names(const std::vector<std::string>& geno_chroms,
+                          const std::vector<std::string>& gff_chroms) {
+  std::unordered_set<std::string> geno_keys;
+  for (const auto& c : geno_chroms) geno_keys.insert(chrom_key(c));
+  std::unordered_set<std::string> gff_keys;
+  for (const auto& c : gff_chroms) gff_keys.insert(chrom_key(c));
+  int n_overlap = 0;
+  for (const auto& k : geno_keys)
+    if (gff_keys.count(k)) ++n_overlap;
+  if (n_overlap == 0) {
+    std::string geno_ex, gff_ex;
+    for (size_t i = 0; i < geno_chroms.size() && i < 5; ++i) {
+      if (i) geno_ex += ", ";
+      geno_ex += geno_chroms[i];
+    }
+    for (size_t i = 0; i < gff_chroms.size() && i < 5; ++i) {
+      if (i) gff_ex += ", ";
+      gff_ex += gff_chroms[i];
+    }
+    die("chromosome name mismatch: genotype has [" + geno_ex +
+        (geno_chroms.size() > 5 ? ", ..." : "") +
+        "] but GFF has [" + gff_ex +
+        (gff_chroms.size() > 5 ? ", ..." : "") +
+        "]. No overlap after chr-prefix and leading-zero normalization.");
+  }
 }
 
 double pnorm_two_sided(double z) {

@@ -10,6 +10,7 @@
 #include <sstream>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <omp.h>
 #include <limits>
 #include <cmath>
@@ -1187,6 +1188,15 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
   const bool have_gff = !opt.gff.empty();
   if (have_gff) {
     annot = load_gff_tss(opt.gff, opt.gff_id_key);
+    std::vector<std::string> gff_chroms;
+    {
+      std::unordered_set<std::string> seen;
+      for (const auto& kv : annot) {
+        if (seen.insert(kv.second.chrom).second)
+          gff_chroms.push_back(kv.second.chrom);
+      }
+    }
+    validate_chrom_names(geno.chromosomes(), gff_chroms);
   } else {
     info("no GFF: mode ignored; genome-wide all-pairs (gw)");
   }

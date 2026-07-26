@@ -36,6 +36,7 @@ public:
   const std::string& path() const { return path_; }
   const std::vector<std::string>& samples() const { return samples_; }
   const std::vector<std::string>& contigs() const { return contigs_; }
+  const std::vector<std::string>& chromosomes() const { return contigs_; }
   bool has_index() const { return indexed_; }
 
   // BGZF decompress pool (n<=1 no-op). Call after open().
