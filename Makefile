@@ -2,7 +2,18 @@
 # Vendored: third_party/htslib @ 1.24, third_party/gffsub, third_party/eigen,
 #           third_party/OpenBLAS @ 0.3.28 (static, serial BLAS/LAPACKE for Eigen)
 CXX ?= g++
-CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wno-unused-parameter -fopenmp
+CXX_STD := $(shell $(CXX) -std=c++17 -dM -E -x c++ /dev/null >/dev/null 2>&1 && echo c++17 || echo no)
+ifeq ($(CXX_STD),c++17)
+  STD_FLAG := -std=c++17
+else
+  CXX_STD_Z := $(shell $(CXX) -std=c++1z -dM -E -x c++ /dev/null >/dev/null 2>&1 && echo c++1z || echo no)
+  ifeq ($(CXX_STD_Z),c++1z)
+    STD_FLAG := -std=c++1z
+  else
+    $(error $(CXX) does not support C++17 (need GCC >= 5, Clang >= 3.5))
+  endif
+endif
+CXXFLAGS ?= -O3 $(STD_FLAG) -Wall -Wextra -Wno-unused-parameter -fopenmp
 CPPFLAGS += -Iinclude -Ithird_party/eigen -Ithird_party/gffsub/src
 
 # ---- OpenBLAS (vendored static; Eigen BLAS/LAPACKE backend) ----
