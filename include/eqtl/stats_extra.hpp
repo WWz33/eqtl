@@ -19,6 +19,12 @@ double acat(const std::vector<double>& pvals);
 // p_emp = (1 + count(T_perm >= T_obs)) / (B+1)
 double p_emp_count(double T_obs, const std::vector<double>& T_perm);
 
+// Beta MLE fit of permutation min-p distribution. Input must be valid p in (0,1)
+// (callers pass perm_min_p filtered to finite, in-range). Returns false on failure;
+// shape1/shape2 are initialized in-place with moment-matching estimates.
+bool beta_fit_mm(std::vector<double>& pval, double& shape1, double& shape2);
+bool beta_fit_ml_simplex(std::vector<double>& pval, double& shape1, double& shape2);
+
 void beta_approx_p(const std::vector<double>& perm_min_p, double obs_min_p,
                    double& p_beta, double& shape1, double& shape2);
 

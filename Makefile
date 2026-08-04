@@ -55,7 +55,7 @@ GFFSUB_CPP := \
 GFFSUB_OBJ := $(GFFSUB_CPP:.cpp=.o)
 
 CPPFLAGS += $(HTS_CFLAGS)
-LDFLAGS += $(HTS_LIBS) -fopenmp -lm
+LDFLAGS += $(HTS_LIBS) -lgsl -lgslcblas -fopenmp -lm
 
 SRC := \
   src/main.cpp \
