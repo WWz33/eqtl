@@ -13,8 +13,8 @@ constexpr long double kPi = 3.14159265358979323846L;
 
 void AcatAcc::add(double p) {
   if (!std::isfinite(p) || p < 0.0) return;
+  if (p >= 1.0 - 1e-12) return; // uninformative (degenerate test); would dominate tan sum
   if (p <= 0.0) p = 1e-300; // keep strongest signals
-  if (p >= 1.0) p = 1.0 - 1e-16;
   tan_sum += std::tan((0.5L - static_cast<long double>(p)) * kPi);
   ++used;
 }

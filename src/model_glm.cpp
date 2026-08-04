@@ -62,6 +62,7 @@ GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, bool
   p.phi = 1.0;
   Eigen::VectorXd beta, mu;
   nb_irls(y, X, p.offset, p.phi, beta, mu, true, p.converged);
+  p.mu = mu;
   return p;
 }
 
@@ -84,6 +85,10 @@ AssocHit test_glm_nb(const GenePrepGlm& prep, const Eigen::VectorXd& g) {
   h.phi = phi;
   h.glm_converged = conv;
   h.beta = beta(prep.X.cols());
+  if (!conv) {
+    h.p = std::numeric_limits<double>::quiet_NaN();
+    return h;
+  }
   Eigen::VectorXd w(prep.n);
   for (int i = 0; i < prep.n; ++i) {
     const double m = std::max(mu(i), 1e-8);

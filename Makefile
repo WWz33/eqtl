@@ -72,6 +72,11 @@ SRC := \
   src/model_glmm.cpp \
   src/stats_extra.cpp \
   src/fission.cpp \
+  src/scan_common.cpp \
+  src/scan_cis.cpp \
+  src/scan_trans_lm.cpp \
+  src/scan_trans_lmm.cpp \
+  src/scan_perm.cpp \
   src/scan.cpp \
   src/output.cpp
 

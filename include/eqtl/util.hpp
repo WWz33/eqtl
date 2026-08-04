@@ -32,6 +32,16 @@ void validate_chrom_names(const std::vector<std::string>& geno_chroms,
 double pnorm_two_sided(double z);
 double p_from_t(double t, double df);
 
+// Stable FNV-1a hash for reproducible perm seeds (std::hash<string> is impl-defined).
+inline unsigned fnv1a(const std::string& s) {
+  unsigned long long h = 14695981039346656037ULL;
+  for (unsigned char c : s) {
+    h ^= c;
+    h *= 1099511628211ULL;
+  }
+  return static_cast<unsigned>(h & 0xFFFFFFFFu);
+}
+
 // MAF gate: keep if maf_min <= MAF <= 1-maf_min; maf_min<=0 disables
 inline bool pass_maf(double maf, double maf_min) {
   if (maf_min <= 0.0) return true;

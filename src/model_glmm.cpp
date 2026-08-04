@@ -120,6 +120,10 @@ AssocHit test_glmm_pois(const GenePrepGlmm& prep, const Eigen::VectorXd& g) {
 
   hit.glmm_converged = conv;
   hit.beta = beta(prep.X.cols());
+  if (!conv) {
+    hit.p = std::numeric_limits<double>::quiet_NaN();
+    return hit;
+  }
 
   const Eigen::VectorXd w = mu.cwiseMax(1e-8);
   Eigen::MatrixXd Sigma = sigma2 * prep.K;

@@ -35,6 +35,7 @@ public:
   size_t n_samples_file() const { return n_file_; }
   size_t n_snps() const { return sites_.size(); }
   std::vector<std::string> chromosomes() const;
+  bool has_index() const { return true; } // bed is always random-access
 
   void set_sample_order(const std::vector<std::string>& sample_ids);
 

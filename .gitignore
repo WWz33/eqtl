@@ -3,9 +3,13 @@
 *.o
 *.a
 *.so
+*.d
 
-# local scripts (not shipped)
-/scripts/
+# local run / tool state at repo root
+/output/
+.serena/
+.codegraph/
+.qoder/
 
 # third_party build products only (sources tracked as submodules)
 third_party/htslib/config.mk

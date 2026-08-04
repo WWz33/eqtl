@@ -71,6 +71,7 @@ struct GenePrepGlm {
   Eigen::VectorXd y;
   Eigen::MatrixXd X;
   Eigen::VectorXd offset;
+  Eigen::VectorXd mu; // null fitted mean (for parametric permutation)
   double phi = 1;
   bool fast = false;
   bool converged = true;

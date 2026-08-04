@@ -63,7 +63,26 @@ static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd
     if (f1 < f2) hi = m2;
     else lo = m1;
   }
-  return 0.5 * (lo + hi);
+  double d = 0.5 * (lo + hi);
+  double cur = reml_negll(d, y_til, X_til, lambda, df);
+  // Newton polish (GEMMA-style) with numeric derivatives; fallback to golden answer.
+  for (int it = 0; it < 8; ++it) {
+    const double h = std::max(d * 1e-4, 1e-9);
+    const double fm = reml_negll(d - h, y_til, X_til, lambda, df);
+    const double fp = reml_negll(d + h, y_til, X_til, lambda, df);
+    const double g1 = (fp - fm) / (2.0 * h);
+    const double g2 = (fp - 2.0 * cur + fm) / (h * h);
+    if (!(g2 > 1e-12)) break;
+    const double step = g1 / g2;
+    const double dn = d - step;
+    if (!(dn > 1e-8 && dn < 1e6)) break;
+    const double vn = reml_negll(dn, y_til, X_til, lambda, df);
+    if (!(vn < cur)) break;
+    d = dn;
+    cur = vn;
+    if (std::abs(step) < d * 1e-8) break;
+  }
+  return d;
 }
 
 void sparsify_grm(Eigen::MatrixXd& K, double abs_thr) {
