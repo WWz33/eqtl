@@ -61,6 +61,11 @@ GFFSUB_OBJ := $(GFFSUB_CPP:.cpp=.o)
 
 CPPFLAGS += $(HTS_CFLAGS)
 LDFLAGS += $(HTS_LIBS) -lgsl -lgslcblas -fopenmp -lm
+# conda's gcc defaults to PIE; our vendored htslib static .o are not PIE-clean,
+# so force a non-PIE executable. Passing -fno-PIE on compile too keeps .o and
+# link consistent.
+CXXFLAGS += -fno-PIE
+LDFLAGS += -no-pie
 
 SRC := \
   src/main.cpp \
