@@ -16,6 +16,13 @@ struct SnpRec {
   std::string alt;
   std::vector<double> dosage; // n samples; effect-allele count (GT) or DS
   double maf = 0;             // effect-allele frequency (column name: af in output)
+  // Per-sample missingness captured *before* mean-imputation: size n_sample,
+  // miss_mask[i] != 0 ↔ sample i was missing at this SNP. Empty ⇔ no missing
+  // samples passed (i.e. complete-case after the MissHand::Filter drop, or
+  // there was no missingness). The GRM builder uses this to compute the GCTA
+  // per-pair jointly-non-missing denominator sub_N; LM/LMM/GLM test consumers
+  // ignore it (they see already-imputed finite dosage).
+  std::vector<int8_t> miss_mask;
 };
 
 struct MissPolicy {

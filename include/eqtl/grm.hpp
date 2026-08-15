@@ -12,6 +12,13 @@ namespace eqtl {
 struct Grm {
   std::vector<std::string> ids;
   Eigen::MatrixXd K; // dense n x n
+  // Per-pair jointly-non-missing marker count (GCTA .grm.N.bin format):
+  // packed n*(n+1)/2, row-major lower-incl-diag (idx = i*(i+1)/2 + j, j<=i).
+  // Populated by compute_grm always (== m for every pair when no missingness);
+  // load_grm_gcta does not load N (eqtl's LMM downstream doesn't consume it).
+  // Emitted by write_grm_gcta so the produced .grm.bin is interoperable with
+  // GCTA's downstream (e.g. --grim-reml needs .grm.N.bin).
+  std::vector<int32_t> N_packed;
 };
 
 // Read GCTA .grm.id + .grm.bin (float32 lower incl diagonal).

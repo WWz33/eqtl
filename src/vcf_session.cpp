@@ -176,6 +176,11 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
   if (ns_all <= 0) return false;
   if (static_cast<int>(out.dosage.size()) != n_an) out.dosage.resize(static_cast<size_t>(n_an));
 
+  // miss_mask cleared lazily below, the first time a missing genotype is
+  // seen in this SNP (alloc-on-first-miss; avoids O(n) reset for the common
+  // missingness-free SNP). Reuse across SNPs is via the snp_reuse_ instance.
+  out.miss_mask.clear();
+
   int n_miss = 0;
   double sum = 0.0;
   int n_ok = 0;
@@ -200,6 +205,8 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
         const float v = ds_[col];
         if (bcf_float_is_missing(v) || !std::isfinite(v)) {
           out.dosage[static_cast<size_t>(i)] = std::numeric_limits<double>::quiet_NaN();
+          if (out.miss_mask.empty()) out.miss_mask.assign(static_cast<size_t>(n_an), 0);
+          out.miss_mask[static_cast<size_t>(i)] = 1;
           ++n_miss;
           continue;
         }
@@ -227,6 +234,8 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
         miss_gt = bcf_gt_is_missing(a1);
       if (miss_gt) {
         out.dosage[static_cast<size_t>(i)] = std::numeric_limits<double>::quiet_NaN();
+        if (out.miss_mask.empty()) out.miss_mask.assign(static_cast<size_t>(n_an), 0);
+        out.miss_mask[static_cast<size_t>(i)] = 1;
         ++n_miss;
         continue;
       }
