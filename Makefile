@@ -20,7 +20,12 @@ CPPFLAGS += -Iinclude -Ithird_party/eigen -Ithird_party/gffsub/src
 OPENBLAS_SRC := third_party/OpenBLAS
 OPENBLAS_LIB := $(OPENBLAS_SRC)/libopenblas.a
 # serial BLAS: app uses OpenMP at SNP/gene level
-OPENBLAS_MAKE_FLAGS := NO_SHARED=1 USE_THREAD=0 USE_OPENMP=0 BINARY=64 DYNAMIC_ARCH=1
+# USE_LOCKING: serial OpenBLAS's blas_memory_alloc slot scan is lock-free by
+# default; the app calls dgemm/dgemv (and LAPACK via EIGEN_USE_LAPACKE) from
+# OpenMP threads, so the allocator must be locked or two threads can claim the
+# same scratch buffer. Verified live funnels: cis per-thread prep Q^T*X dgemm,
+# per-SNP Q^T*g dgemv; trans/gw LMM per-SNP XtDX dgemm.
+OPENBLAS_MAKE_FLAGS := NO_SHARED=1 USE_THREAD=0 USE_OPENMP=0 USE_LOCKING=1 BINARY=64 DYNAMIC_ARCH=1
 CPPFLAGS += -DEIGEN_USE_BLAS -DEIGEN_USE_LAPACKE -I$(OPENBLAS_SRC)
 # gfortran runtime required by static OpenBLAS LAPACK objects
 LDFLAGS += $(OPENBLAS_LIB) -lgfortran -lpthread
