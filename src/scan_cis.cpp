@@ -81,10 +81,7 @@ void run_cis_bfile_parallel(const Options& opt, PhenoData& ph, const CovData& co
         const auto& w = works[wi];
         Eigen::VectorXd y = ph.Y.col(w.gi);
         GeneReady gr;
-        bool y_has_na = false;
-        for (int i = 0; i < y.size(); ++i)
-          if (!std::isfinite(y(i))) { y_has_na = true; break; }
-        if (have_grm_basis && !y_has_na) {
+        if (have_grm_basis && all_finite(y, cov.X)) {
           gr.keep.resize(static_cast<size_t>(y.size()));
           std::iota(gr.keep.begin(), gr.keep.end(), 0);
           gr.y = y;

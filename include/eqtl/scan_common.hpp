@@ -65,6 +65,18 @@ bool build_gene_ready(const Eigen::VectorXd& y_full, const Eigen::MatrixXd& X_fu
                       const Eigen::MatrixXd* K_full, bool need_k, bool need_lmm_basis,
                       bool fast_sparse, GeneReady& out);
 
+// Shared-basis fast path skips build_gene_ready's per-sample filtering, so it
+// requires y and every covariate column to be all-finite. Non-finite entries
+// (Inf from overflow, etc.) would otherwise reach Q^T*X and silently fail LDLT.
+inline bool all_finite(const Eigen::VectorXd& y, const Eigen::MatrixXd& X) {
+  for (Eigen::Index i = 0; i < y.size(); ++i)
+    if (!std::isfinite(y(i))) return false;
+  for (Eigen::Index j = 0; j < X.cols(); ++j)
+    for (Eigen::Index i = 0; i < X.rows(); ++i)
+      if (!std::isfinite(X(i, j))) return false;
+  return true;
+}
+
 Eigen::VectorXd subset_dosage(const std::vector<double>& full, const std::vector<int>& keep);
 
 // ---------------------------------------------------------------------------
