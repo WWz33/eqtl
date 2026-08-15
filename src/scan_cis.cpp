@@ -3,6 +3,8 @@
 #include "eqtl/vcf_session.hpp"
 #include <omp.h>
 #include <mutex>
+#include <memory>
+#include <type_traits>
 #include <unordered_map>
 #include <sstream>
 
@@ -60,13 +62,29 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
     have_grm_basis = true;
   }
 
+  // Pre-open the genotype source once before the parallel region. For PlinkBed
+  // this amortizes the BIM/FAM parse (~tens of MB of string tables) across all
+  // worker threads via clone_for_thread(meta-only shared, per-thread bed FILE*).
+  // For VcfSession each thread still opens its own htsFile/header — opening one
+  // here only to share metadata is not possible for the indexed-BCF VCF path.
+  std::unique_ptr<G> g_master;
+  if constexpr (std::is_same_v<G, PlinkBed>) {
+    g_master = std::make_unique<G>();
+    g_master->open(src);
+  }
+
 #pragma omp parallel num_threads(T)
   {
     const int tid = omp_get_thread_num();
     const int nT = omp_get_num_threads();
     try {
       G g;
-      g.open(src);
+      if constexpr (std::is_same_v<G, PlinkBed>) {
+        if (g_master) PlinkBed::clone_for_thread(*g_master, g);
+        else g.open(src);
+      } else {
+        g.open(src);
+      }
       prep_thread_geno(g);
       g.set_sample_order(ph.sample_ids);
       ScopeOut local;

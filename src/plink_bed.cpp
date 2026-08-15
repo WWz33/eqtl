@@ -1,5 +1,5 @@
 #define _FILE_OFFSET_BITS 64
-/* eqtl — PLINK bed: sequential block fread + 2-bit lookup + buffer reuse */
+/* eqtl — PLINK bed/bim/fam (sequential block fread + 2-bit lookup + buffer reuse) */
 #include "eqtl/plink_bed.hpp"
 #include <unordered_set>
 #include "eqtl/util.hpp"
@@ -17,35 +17,34 @@ PlinkBed::~PlinkBed() {
   }
 }
 
-void PlinkBed::init_lut() {
-  pair_lut_[0] = 2;
-  pair_lut_[1] = -1;
-  pair_lut_[2] = 1;
-  pair_lut_[3] = 0;
+void PlinkBed::init_meta_views() {
+  sites_ = &sites_meta_->sites;
+  chrom_range_ = &sites_meta_->chrom_range;
+  pair_lut_ = &sites_meta_->pair_lut;
 }
 
-void PlinkBed::read_fam(const std::string& path) {
+void PlinkBed::read_fam(Meta& m, const std::string& path) {
   std::ifstream in(path);
   if (!in) die("cannot open " + path);
-  samples_.clear();
+  m.samples.clear();
   std::string line;
   while (std::getline(in, line)) {
     if (line.empty()) continue;
     auto t = split_ws(line);
     if (t.size() < 2) die("malformed fam line (need FID IID ...): " + path);
-    samples_.push_back(t[1]);
+    m.samples.push_back(t[1]);
   }
-  if (samples_.empty()) die("empty fam: " + path);
-  assert_unique_ids(samples_, "plink fam IID");
-  n_file_ = samples_.size();
+  if (m.samples.empty()) die("empty fam: " + path);
+  assert_unique_ids(m.samples, "plink fam IID");
+  m.n_file = m.samples.size();
 }
 
-void PlinkBed::read_bim(const std::string& path) {
+void PlinkBed::read_bim(Meta& m, const std::string& path) {
   FILE* fp = std::fopen(path.c_str(), "rb");
   if (!fp) die("cannot open " + path);
 
-  sites_.clear();
-  sites_.reserve(1 << 20);
+  m.sites.clear();
+  m.sites.reserve(1 << 20);
 
   // 4MB stdio buffer for fast streaming I/O
   std::vector<char> file_buf(4 << 20);
@@ -117,16 +116,16 @@ void PlinkBed::read_bim(const std::string& path) {
 
     if (s.chrom.empty() || s.id.empty() || s.a1.empty() || s.a2.empty())
       die("malformed bim line in: " + path);
-    sites_.push_back(std::move(s));
+    m.sites.push_back(std::move(s));
   }
   std::fclose(fp);
 
-  if (sites_.empty()) die("empty bim: " + path);
+  if (m.sites.empty()) die("empty bim: " + path);
   // ponytail: string key once at load; die on identical chrom:pos:A1:A2
   {
     std::unordered_set<std::string> seen;
-    seen.reserve(sites_.size() * 2);
-    for (const auto& s : sites_) {
+    seen.reserve(m.sites.size() * 2);
+    for (const auto& s : m.sites) {
       std::string k;
       k.reserve(s.chrom.size() + s.a1.size() + s.a2.size() + 24);
       k.append(s.chrom).push_back('\t');
@@ -143,16 +142,16 @@ void PlinkBed::read_bim(const std::string& path) {
   // cis windows (verified: shuffled bim loses ~37% of cis pairs, no warning).
   {
     std::unordered_set<std::string> seen_chroms;
-    for (size_t i = 0; i < sites_.size(); ++i) {
+    for (size_t i = 0; i < m.sites.size(); ++i) {
       const bool first_of_run =
-          i == 0 || !chrom_equal(sites_[i - 1].chrom, sites_[i].chrom);
+          i == 0 || !chrom_equal(m.sites[i - 1].chrom, m.sites[i].chrom);
       if (first_of_run) {
-        if (!seen_chroms.insert(chrom_key(sites_[i].chrom)).second)
-          die("plink bim: chromosome " + sites_[i].chrom + " appears in more than one "
+        if (!seen_chroms.insert(chrom_key(m.sites[i].chrom)).second)
+          die("plink bim: chromosome " + m.sites[i].chrom + " appears in more than one "
               "block (line " + std::to_string(i + 1) + " of " + path +
               "); region queries would miss SNPs — re-sort: plink --bfile <prefix> --make-bed");
-      } else if (sites_[i - 1].pos > sites_[i].pos) {
-        die("plink bim: positions not sorted within chromosome " + sites_[i].chrom +
+      } else if (m.sites[i - 1].pos > m.sites[i].pos) {
+        die("plink bim: positions not sorted within chromosome " + m.sites[i].chrom +
             " (line " + std::to_string(i + 1) + " of " + path +
             "); region queries would miss SNPs — re-sort: plink --bfile <prefix> --make-bed");
       }
@@ -160,27 +159,27 @@ void PlinkBed::read_bim(const std::string& path) {
   }
 }
 
-void PlinkBed::build_chrom_ranges() {
-  chrom_range_.clear();
-  if (sites_.empty()) return;
+void PlinkBed::build_chrom_ranges(Meta& m) {
+  m.chrom_range.clear();
+  if (m.sites.empty()) return;
   size_t i = 0;
-  while (i < sites_.size()) {
-    const std::string key = chrom_key(sites_[i].chrom);
+  while (i < m.sites.size()) {
+    const std::string key = chrom_key(m.sites[i].chrom);
     size_t j = i + 1;
-    while (j < sites_.size() && chrom_equal(sites_[j].chrom, sites_[i].chrom)) ++j;
-    chrom_range_[key] = {i, j};
-    chrom_range_[sites_[i].chrom] = {i, j};
+    while (j < m.sites.size() && chrom_equal(m.sites[j].chrom, m.sites[i].chrom)) ++j;
+    m.chrom_range[key] = {i, j};
+    m.chrom_range[m.sites[i].chrom] = {i, j};
     i = j;
   }
 }
 
 std::vector<std::string> PlinkBed::chromosomes() const {
   std::vector<std::string> out;
-  if (sites_.empty()) return out;
-  out.push_back(sites_[0].chrom);
-  for (size_t i = 1; i < sites_.size(); ++i) {
-    if (!chrom_equal(sites_[i].chrom, out.back()))
-      out.push_back(sites_[i].chrom);
+  if (sites_->empty()) return out;
+  out.push_back((*sites_)[0].chrom);
+  for (size_t i = 1; i < sites_->size(); ++i) {
+    if (!chrom_equal((*sites_)[i].chrom, out.back()))
+      out.push_back((*sites_)[i].chrom);
   }
   return out;
 }
@@ -199,7 +198,7 @@ void PlinkBed::open_bed(const std::string& path) {
   if (std::fread(magic, 1, 3, bed_fp_) != 3) die("cannot read bed magic: " + path);
   if (magic[0] != 0x6c || magic[1] != 0x1b) die("not a PLINK1 .bed (bad magic): " + path);
   if (magic[2] != 0x01) die("only SNP-major PLINK .bed is supported: " + path);
-  bytes_per_snp_ = (n_file_ + 3) / 4;
+  bytes_per_snp_ = (sites_meta_->n_file + 3) / 4;
   // ponytail: cap block by ~4MB; floor 4096 SNPs
   block_snps_ = std::max(kMinBlockSnps, kTargetBlockBytes / std::max<size_t>(bytes_per_snp_, 1));
   block_buf_.assign(block_snps_ * bytes_per_snp_, 0);
@@ -207,24 +206,44 @@ void PlinkBed::open_bed(const std::string& path) {
   if (fseeko(bed_fp_, 0, SEEK_END) != 0) die("bed seek end failed: " + path);
   const off_t fsz = ftello(bed_fp_);
   if (fsz < 0) die("bed ftell failed: " + path);
-  const uint64_t expect = 3ull + bytes_per_snp_ * static_cast<uint64_t>(sites_.size());
+  const uint64_t expect = 3ull + bytes_per_snp_ * static_cast<uint64_t>(sites_->size());
   if (static_cast<uint64_t>(fsz) < expect) die("bed size too small for bim/fam: " + path);
   if (fseeko(bed_fp_, 3, SEEK_SET) != 0) die("bed seek data failed: " + path);
 }
 
 void PlinkBed::open(const std::string& prefix) {
   prefix_ = prefix;
-  init_lut();
-  read_fam(prefix + ".fam");
-  read_bim(prefix + ".bim");
-  build_chrom_ranges();
+  auto meta = std::make_shared<Meta>();
+  read_fam(*meta, prefix + ".fam");
+  read_bim(*meta, prefix + ".bim");
+  build_chrom_ranges(*meta);
+  // init pair LUT
+  meta->pair_lut[0] = 2;
+  meta->pair_lut[1] = -1;
+  meta->pair_lut[2] = 1;
+  meta->pair_lut[3] = 0;
+  sites_meta_ = std::move(meta);
+  init_meta_views();
   open_bed(prefix + ".bed");
-  info("bfile: " + std::to_string(n_file_) + " samples, " +
-       std::to_string(sites_.size()) + " SNPs [" + prefix + "]");
+  info("bfile: " + std::to_string(sites_meta_->n_file) + " samples, " +
+       std::to_string(sites_->size()) + " SNPs [" + prefix + "]");
+}
+
+// Per-thread clone: share sites_meta_ (immutable BIM/FAM tables + chrom index
+// + pair LUT + n_file_) so workers do not re-parse the ~tens-of-MB bim/fam.
+// Each clone owns its private bed FILE*, stdio buffer, block buffer,
+// sample_col_, and snp_reuse_ for thread-safe decoding. Must populate a
+// default-constructed PlinkBed& out — copy/move assignments are deleted because
+// the FILE* and per-thread buffers are strictly instance-owned.
+void PlinkBed::clone_for_thread(const PlinkBed& src, PlinkBed& out) {
+  out.prefix_ = src.prefix_;
+  out.sites_meta_ = src.sites_meta_;          // shared_ptr copy → bumps refcount
+  out.init_meta_views();
+  out.open_bed(src.prefix_ + ".bed");          // private FILE*, own stdio buffer
 }
 
 void PlinkBed::set_sample_order(const std::vector<std::string>& sample_ids) {
-  const auto m = index_map(samples_);
+  const auto m = index_map(sites_meta_->samples);
   sample_col_.clear();
   sample_col_.reserve(sample_ids.size());
   for (const auto& id : sample_ids) {
@@ -243,7 +262,7 @@ bool PlinkBed::seek_snp(size_t snp_idx) {
 
 bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& miss, double maf_min,
                           SnpRec& out) {
-  if (sample_col_.empty() || snp_idx >= sites_.size()) return false;
+  if (sample_col_.empty() || snp_idx >= sites_->size()) return false;
   const int n_an = static_cast<int>(sample_col_.size());
   if (static_cast<int>(out.dosage.size()) != n_an) out.dosage.resize(static_cast<size_t>(n_an));
   int n_miss = 0;
@@ -252,12 +271,12 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
   // ponytail: write dosage directly; miss positions set after if needed (skip full NaN memset)
   for (int i = 0; i < n_an; ++i) {
     const int col = sample_col_[static_cast<size_t>(i)];
-    if (col < 0 || static_cast<size_t>(col) >= n_file_) return false;
+    if (col < 0 || static_cast<size_t>(col) >= sites_meta_->n_file) return false;
     const size_t byte_i = static_cast<size_t>(col) / 4;
     const int j = col % 4;
     const uint8_t b = row[byte_i];
     const int pair = (b >> (2 * j)) & 3;
-    const int a1c = pair_lut_[pair];
+    const int a1c = (*pair_lut_)[pair];
     if (a1c < 0) {
       out.dosage[static_cast<size_t>(i)] = std::numeric_limits<double>::quiet_NaN();
       ++n_miss;
@@ -286,7 +305,7 @@ bool PlinkBed::decode_row(size_t snp_idx, const uint8_t* row, const MissPolicy& 
   if (af < 1e-12 || af > 1.0 - 1e-12) return false;
   if (!pass_maf(af, maf_min)) return false; // pass_maf uses min(af,1-af) internally
 
-  const auto& st = sites_[snp_idx];
+  const auto& st = (*sites_)[snp_idx];
   out.chrom = st.chrom;
   out.pos = st.pos;
   // effect allele = A1 → alt; other allele A2 → ref (PLINK convention, not genome REF/ALT)
@@ -305,8 +324,8 @@ bool PlinkBed::for_each_range(size_t lo, size_t hi, const MissPolicy& miss, doub
 bool PlinkBed::for_each_range_pos(size_t lo, size_t hi, int64_t p0, int64_t p1,
                                   const MissPolicy& miss, double maf_min,
                                   const std::function<bool(const SnpRec&)>& fn) {
-  if (lo >= hi || lo >= sites_.size()) return true;
-  if (hi > sites_.size()) hi = sites_.size();
+  if (lo >= hi || lo >= sites_->size()) return true;
+  if (hi > sites_->size()) hi = sites_->size();
   if (!seek_snp(lo)) die("bed seek failed");
 
   size_t t = lo;
@@ -318,7 +337,7 @@ bool PlinkBed::for_each_range_pos(size_t lo, size_t hi, int64_t p0, int64_t p1,
     }
     for (size_t k = 0; k < n_take; ++k) {
       const size_t idx = t + k;
-      const int64_t pos = sites_[idx].pos;
+      const int64_t pos = (*sites_)[idx].pos;
       if (pos < p0 || pos > p1) continue;
       const uint8_t* row = block_buf_.data() + k * bytes_per_snp_;
       if (!decode_row(idx, row, miss, maf_min, snp_reuse_)) continue;
@@ -331,7 +350,7 @@ bool PlinkBed::for_each_range_pos(size_t lo, size_t hi, int64_t p0, int64_t p1,
 
 void PlinkBed::for_each_snp(const MissPolicy& miss, double maf_min,
                             const std::function<bool(const SnpRec&)>& fn) {
-  for_each_range(0, sites_.size(), miss, maf_min, fn);
+  for_each_range(0, sites_->size(), miss, maf_min, fn);
 }
 
 void PlinkBed::for_each_snp_region(const std::string& chrom, int64_t start, int64_t end,
@@ -342,15 +361,15 @@ void PlinkBed::for_each_snp_region(const std::string& chrom, int64_t start, int6
 
   size_t clo = 0, chi = 0;
   bool found = false;
-  auto it = chrom_range_.find(chrom);
-  if (it == chrom_range_.end()) it = chrom_range_.find(chrom_key(chrom));
-  if (it != chrom_range_.end()) {
+  auto it = chrom_range_->find(chrom);
+  if (it == chrom_range_->end()) it = chrom_range_->find(chrom_key(chrom));
+  if (it != chrom_range_->end()) {
     clo = it->second.first;
     chi = it->second.second;
     found = true;
   } else {
-    for (const auto& kv : chrom_range_) {
-      if (kv.second.first < sites_.size() && chrom_equal(sites_[kv.second.first].chrom, chrom)) {
+    for (const auto& kv : *chrom_range_) {
+      if (kv.second.first < sites_->size() && chrom_equal((*sites_)[kv.second.first].chrom, chrom)) {
         clo = kv.second.first;
         chi = kv.second.second;
         found = true;
@@ -360,7 +379,7 @@ void PlinkBed::for_each_snp_region(const std::string& chrom, int64_t start, int6
   }
   if (!found) return;
 
-  auto pos_at = [&](size_t i) { return sites_[i].pos; };
+  auto pos_at = [&](size_t i) { return (*sites_)[i].pos; };
   size_t lo = clo, hi = chi;
   while (lo < hi) {
     size_t mid = lo + (hi - lo) / 2;
