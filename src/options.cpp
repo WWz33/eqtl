@@ -285,6 +285,19 @@ int parse_options(int argc, char** argv, Options& opt) {
     return 1;
   }
   if (opt.window < 0) die("--window must be >= 0");
+
+  // INT (rank-based quantile transform to Φ⁻¹) produces continuous ℝ values
+  // and is semantically incompatible with count models (NB/Poisson), which
+  // require non-negative integer responses. Refuse the combination up front so
+  // no code path silently fits GLM/GLMM on INT-transformed counts.
+  if (opt.pheno_norm == PhenNorm::Int) {
+    for (Model m : opt.models) {
+      if (m == Model::Glm || m == Model::Glmm) {
+        die("--pheno-norm int is incompatible with count model " + model_str(m) +
+            " (apply INT only for lm/lmm; count models need raw integer counts)");
+      }
+    }
+  }
   return 0;
 }
 
