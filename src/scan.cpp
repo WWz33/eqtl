@@ -167,6 +167,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
           const std::string& gene = ph.gene_ids[gi];
           Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
+          apply_pheno_norm(opt, y);
           GeneLoc loc_store;
           bool has_loc = false;
           if (have_gff) {
@@ -193,6 +194,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         for (size_t gi = 0; gi < ph.gene_ids.size(); ++gi) {
           const std::string& gene = ph.gene_ids[gi];
           Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
+          apply_pheno_norm(opt, y);
           GeneLoc loc_store;
           bool has_loc = false;
           if (have_gff) {
@@ -240,6 +242,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
             info("scan: gene " + std::to_string(gi) + "/" + std::to_string(ph.gene_ids.size()));
           const std::string& gene = ph.gene_ids[gi];
           Eigen::VectorXd y = ph.Y.col(static_cast<int>(gi));
+          apply_pheno_norm(opt, y);
 
           if (needs_counts(model) && !looks_like_counts(y)) {
             warn("skip non-count gene for " + model_str(model) + ": " + gene);

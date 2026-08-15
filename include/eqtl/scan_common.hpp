@@ -116,4 +116,13 @@ double test_one_p(Model model, bool fast, const GeneReady& gr, const Eigen::Vect
 // ---------------------------------------------------------------------------
 void bh_adjust(std::vector<GeneSummary>& gs);
 
+// Apply the requested per-gene phenotype normalization *in-place* before any
+// covariate residualization / model fit, so the transform operates on raw
+// per-gene expression values (GTEx v8 / QTLtools --normal / fastQTL --rank).
+// No-op when opt.pheno_norm == PhenNorm::None (default → regression-preserving).
+// INT preserves non-finite entries; ranks/Φ⁻¹ are computed on the finite set.
+inline void apply_pheno_norm(const Options& opt, Eigen::VectorXd& y) {
+  if (opt.pheno_norm == PhenNorm::Int) inverse_normal_transform(y);
+}
+
 } // namespace eqtl

@@ -8,6 +8,7 @@ namespace eqtl {
 enum class Mode { Cis, Trans, All, Gw };
 enum class Model { Lm, Glm, Lmm, Glmm };
 enum class MissHand { Filter, Impute };
+enum class PhenNorm { None, Int };  // per-gene phenotype normalization off | INT
 
 struct Options {
   // Genotypes: exactly one of vcf or bfile (PLINK prefix → .bed/.bim/.fam)
@@ -29,6 +30,11 @@ struct Options {
   double pval_trans = 1e-5;
 
   MissHand miss = MissHand::Impute;
+  // per-gene phenotype normalization: off (default, regression-preserving) or
+  // rank-based Inverse Normal Transform (GTEx v8 / eQTLcatalogue / QTLtools
+  // --normal / fastQTL --rank). Applied BEFORE covariate residualization so
+  // the transform runs on raw per-gene expression values.
+  PhenNorm pheno_norm = PhenNorm::None;
   // drop SNP if missing fraction among analysis samples > max_miss
   // filter default 0 => any missing drops; impute still respects max_miss before fill
   double max_miss = 0.8;
@@ -65,5 +71,6 @@ void print_version();
 std::string mode_str(Mode m);
 std::string model_str(Model m);
 const char* miss_str(MissHand m);
+const char* pheno_norm_str(PhenNorm p);
 
 } // namespace eqtl

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <cctype>
+#include <Eigen/Dense>
 
 namespace eqtl {
 
@@ -31,6 +32,20 @@ void validate_chrom_names(const std::vector<std::string>& geno_chroms,
 // two-sided normal p from |z|
 double pnorm_two_sided(double z);
 double p_from_t(double t, double df);
+
+// Standard-normal quantile Φ⁻¹(p) for p ∈ (0,1). Used by inverse_normal_transform;
+// clamps p to [1e-15, 1-1e-15] for safety. ~1e-9 rel-err rational approx
+// (Acklam 2003) — sufficient for phenotype normalization (mean abs err < 1e-9).
+double qnorm_inv(double p);
+
+// Rank-based Inverse Normal Transform (Blizzard 2010; GTEx v8 / eQTLcatalogue
+// pipeline): y → Φ⁻¹((avg_rank − 0.5)/n) where avg_rank uses the average-rank
+// tie convention (matches scipy rankdata(method='average') / QTLtools --normal
+// / fastQTL --rank). Non-finite entries are preserved as-is, and ranks are
+// computed on the finite subset only (n = #finite). Ties share the average of
+// their 1-based positions. Idempotent on already-normal data up to FP noise.
+// In-place on |y|.
+void inverse_normal_transform(Eigen::VectorXd& y);
 
 // Stable FNV-1a hash for reproducible perm seeds (std::hash<string> is impl-defined).
 inline unsigned fnv1a(const std::string& s) {

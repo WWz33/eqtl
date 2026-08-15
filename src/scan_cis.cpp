@@ -106,6 +106,7 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
           info("cis: gene " + std::to_string(wi) + "/" + std::to_string(nW));
         const auto& w = works[wi];
         Eigen::VectorXd y = ph.Y.col(w.gi);
+        apply_pheno_norm(opt, y);  // INT applied pre-residualization (GTEx v8 convention)
         GeneReady gr;
         if (have_grm_basis && all_finite(y, cov.X)) {
           gr.keep.resize(static_cast<size_t>(y.size()));

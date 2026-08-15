@@ -60,6 +60,10 @@ const char* miss_str(MissHand m) {
   return m == MissHand::Filter ? "filter" : "impute";
 }
 
+const char* pheno_norm_str(PhenNorm p) {
+  return p == PhenNorm::Int ? "int" : "none";
+}
+
 void print_version() {
   std::cout << "eqtl 0.1.0\n";
 }
@@ -92,6 +96,9 @@ void print_help() {
     << "        --max-miss FLOAT   drop SNP if missing fraction > value  [0.8]\n"
     << "                           (1.0 matches GCTA --geno 1.0 keep-all default)\n"
     << "        --maf FLOAT        min MAF on analysis samples  [0=off]\n"
+    << "        --pheno-norm STR   per-gene phenotype normalization none|int  [none]\n"
+    << "                           int = rank-based Inverse Normal Transform\n"
+    << "                           (Blizzard 2010; GTEx v8 / eQTLcatalogue / QTLtools --normal)\n"
     << "        --fast             sparse GRM approx (LMM); glm/glmm: fix null phi/sigma2\n"
     << "\n"
     << "Fission options (subcommand: eqtl fission ...):\n"
@@ -153,6 +160,7 @@ int parse_options(int argc, char** argv, Options& opt) {
       {"miss-hand", required_argument, 0, 1006},
       {"max-miss", required_argument, 0, 1012},
       {"maf", required_argument, 0, 1013},
+      {"pheno-norm", required_argument, 0, 1022},
       {"fast", no_argument, 0, 1007},
       {"thread", required_argument, 0, 't'},
       {"threads", required_argument, 0, 't'},
@@ -217,6 +225,13 @@ int parse_options(int argc, char** argv, Options& opt) {
       case 1013:
         opt.maf = std::atof(optarg);
         if (opt.maf < 0.0 || opt.maf > 0.5) die("--maf must be in [0,0.5]");
+        break;
+      case 1022:
+        if (std::string(optarg) == "none" || std::string(optarg) == "off")
+          opt.pheno_norm = PhenNorm::None;
+        else if (std::string(optarg) == "int" || std::string(optarg) == "rank")
+          opt.pheno_norm = PhenNorm::Int;
+        else die("invalid --pheno-norm (none|int)");
         break;
       case 1014:
         opt.peer_factors = std::atoi(optarg);
