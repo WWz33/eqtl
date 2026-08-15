@@ -85,7 +85,7 @@ void print_help() {
     << "        --make-grm         write relatedness matrix and exit\n"
     << "    -m, --mode STR         cis|trans|all|gw  [all]\n"
     << "        --model STR        lm|glm|lmm|glmm[,...]  [lmm]\n"
-    << "    -w, --window INT       cis window around TSS (bp)  [1000000]\n"
+    << "    -w, --window INT       cis flank around gene body (bp)  [1000000]\n"
     << "        --pval-cis FLOAT   cis output p threshold  [1e-5]\n"
     << "        --pval-trans FLOAT trans/gw output p threshold  [1e-5]\n"
     << "        --miss-hand STR    filter|impute missing GT  [impute]\n"

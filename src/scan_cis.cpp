@@ -101,8 +101,7 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
         }
         GeneSummary summary;
         const GeneLoc* locp = &w.loc;
-        const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
-        const int64_t cend = locp->tss + opt.window;
+        const auto [cstart, cend] = cis_window_bounds(*locp, opt.window);
         auto stream = [&](auto&& take) {
           g.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
             take(s);

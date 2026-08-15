@@ -14,6 +14,7 @@
 #include <string>
 #include <limits>
 #include <cmath>
+#include <utility>
 
 namespace eqtl {
 
@@ -51,10 +52,19 @@ struct GeneReady {
 inline bool needs_grm(Model m) { return m == Model::Lmm || m == Model::Glmm; }
 inline bool needs_counts(Model m) { return m == Model::Glm || m == Model::Glmm; }
 
+// cis window anchored on the gene body [start-window, end+window], matching
+// QTLtools / GTEx / eQTLcatalogue; a superset of TSS±window. window is the
+// flanking distance in bp (phenotype_start/phenotype_end are 1-based inclusive).
+template <typename T>
+inline std::pair<int64_t, int64_t> cis_window_bounds(const GeneLoc& loc, T window) {
+  int64_t span_start = loc.start - static_cast<int64_t>(window);
+  if (span_start < 1) span_start = 1;
+  return {span_start, loc.end + static_cast<int64_t>(window)};
+}
+
 inline bool in_cis_window(const SnpRec& s, const GeneLoc& loc, int window) {
   if (!chrom_equal(s.chrom, loc.chrom)) return false;
-  const int64_t cstart = std::max<int64_t>(1, loc.tss - window);
-  const int64_t cend = loc.tss + window;
+  const auto [cstart, cend] = cis_window_bounds(loc, window);
   return s.pos >= cstart && s.pos <= cend;
 }
 

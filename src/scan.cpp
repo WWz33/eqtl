@@ -271,8 +271,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
 
           if (scope == "cis") {
             if (!locp) { summaries.pop_back(); continue; }
-            const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
-            const int64_t cend = locp->tss + opt.window;
+            const auto [cstart, cend] = cis_window_bounds(*locp, opt.window);
             auto stream = [&](auto&& take) {
               geno.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
                 take(s);

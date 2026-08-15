@@ -57,6 +57,8 @@ std::unordered_map<std::string, GeneLoc> load_gff_tss(
     GeneLoc g;
     g.id = id;
     g.chrom = rec.seqid;
+    g.start = rec.start;
+    g.end = rec.end;
     g.tss = tss;
     g.strand = strand;
     g.ok = true;
