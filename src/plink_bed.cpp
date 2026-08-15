@@ -138,6 +138,26 @@ void PlinkBed::read_bim(const std::string& path) {
             ":" + s.a2);
     }
   }
+  // for_each_snp_region binary-searches positions inside one contiguous block
+  // per chromosome; an interleaved or unsorted bim silently drops SNPs from
+  // cis windows (verified: shuffled bim loses ~37% of cis pairs, no warning).
+  {
+    std::unordered_set<std::string> seen_chroms;
+    for (size_t i = 0; i < sites_.size(); ++i) {
+      const bool first_of_run =
+          i == 0 || !chrom_equal(sites_[i - 1].chrom, sites_[i].chrom);
+      if (first_of_run) {
+        if (!seen_chroms.insert(chrom_key(sites_[i].chrom)).second)
+          die("plink bim: chromosome " + sites_[i].chrom + " appears in more than one "
+              "block (line " + std::to_string(i + 1) + " of " + path +
+              "); region queries would miss SNPs — re-sort: plink --bfile <prefix> --make-bed");
+      } else if (sites_[i - 1].pos > sites_[i].pos) {
+        die("plink bim: positions not sorted within chromosome " + sites_[i].chrom +
+            " (line " + std::to_string(i + 1) + " of " + path +
+            "); region queries would miss SNPs — re-sort: plink --bfile <prefix> --make-bed");
+      }
+    }
+  }
 }
 
 void PlinkBed::build_chrom_ranges() {
