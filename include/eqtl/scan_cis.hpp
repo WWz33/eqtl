@@ -184,11 +184,14 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   }
 }
 
-// Per-thread PlinkBed cis parallel (declared here, defined in scan_cis.cpp)
-void run_cis_bfile_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
-                            const std::unordered_map<std::string, GeneLoc>& annot,
-                            Eigen::MatrixXd* Kptr, bool need_k, bool need_lmm_basis,
-                            Model model, ScopeOut& so, double pthr,
-                            std::vector<GeneSummary>& summaries);
+// Per-thread cis parallel over a genotype source G (defined in scan_cis.cpp,
+// instantiated for PlinkBed and VcfSession). Each thread opens its own G and
+// streams region queries for its chunk of genes.
+template <typename G>
+void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
+                      const std::unordered_map<std::string, GeneLoc>& annot,
+                      Eigen::MatrixXd* Kptr, bool need_k, bool need_lmm_basis,
+                      Model model, ScopeOut& so, double pthr,
+                      std::vector<GeneSummary>& summaries, const std::string& src);
 
 } // namespace eqtl

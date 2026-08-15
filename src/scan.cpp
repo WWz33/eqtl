@@ -213,10 +213,15 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         summaries.reserve(jobs.size());
         for (auto& j : jobs) summaries.push_back(std::move(j.summary));
 
-      } else if (scope == "cis" && opt.use_bfile() && opt.threads > 1 && have_gff) {
-        info("cis: per-thread PlinkBed (" + std::to_string(opt.threads) + " threads)");
-        run_cis_bfile_parallel(opt, ph, cov, annot, Kptr, need_k, need_lmm_basis, model, so, pthr,
-                               summaries);
+      } else if (scope == "cis" && opt.threads > 1 && have_gff) {
+        info("cis: per-thread parallel (" + std::to_string(opt.threads) + " threads)");
+        if (opt.use_bfile()) {
+          run_cis_parallel<PlinkBed>(opt, ph, cov, annot, Kptr, need_k, need_lmm_basis, model, so,
+                                     pthr, summaries, opt.bfile);
+        } else {
+          run_cis_parallel<VcfSession>(opt, ph, cov, annot, Kptr, need_k, need_lmm_basis, model, so,
+                                       pthr, summaries, opt.vcf);
+        }
 
       } else {
         // Gene-outer fallback (cis single-thread, GLM/GLMM, trans/gw non-LM/LMM)

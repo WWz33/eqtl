@@ -1,5 +1,6 @@
 #include "eqtl/scan_cis.hpp"
 #include "eqtl/plink_bed.hpp"
+#include "eqtl/vcf_session.hpp"
 #include <omp.h>
 #include <mutex>
 #include <unordered_map>
@@ -7,11 +8,17 @@
 
 namespace eqtl {
 
-void run_cis_bfile_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
-                            const std::unordered_map<std::string, GeneLoc>& annot,
-                            Eigen::MatrixXd* Kptr, bool need_k, bool need_lmm_basis,
-                            Model model, ScopeOut& so, double pthr,
-                            std::vector<GeneSummary>& summaries) {
+// Genes are already parallelized across threads; drop per-thread BGZF decode
+// threads so each thread keeps a single decode context.
+static void prep_thread_geno(PlinkBed&) {}
+static void prep_thread_geno(VcfSession& v) { v.set_threads(1); }
+
+template <typename G>
+void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
+                      const std::unordered_map<std::string, GeneLoc>& annot,
+                      Eigen::MatrixXd* Kptr, bool need_k, bool need_lmm_basis,
+                      Model model, ScopeOut& so, double pthr,
+                      std::vector<GeneSummary>& summaries, const std::string& src) {
   struct GeneWork {
     int gi = -1;
     std::string gene;
@@ -58,9 +65,10 @@ void run_cis_bfile_parallel(const Options& opt, PhenoData& ph, const CovData& co
     const int tid = omp_get_thread_num();
     const int nT = omp_get_num_threads();
     try {
-      PlinkBed bed;
-      bed.open(opt.bfile);
-      bed.set_sample_order(ph.sample_ids);
+      G g;
+      g.open(src);
+      prep_thread_geno(g);
+      g.set_sample_order(ph.sample_ids);
       ScopeOut local;
       const std::string t_pairs = opt.out + ".tmp." + std::to_string(tid) + ".pairs";
       const std::string t_top = opt.out + ".tmp." + std::to_string(tid) + ".top";
@@ -96,7 +104,7 @@ void run_cis_bfile_parallel(const Options& opt, PhenoData& ph, const CovData& co
         const int64_t cstart = std::max<int64_t>(1, locp->tss - opt.window);
         const int64_t cend = locp->tss + opt.window;
         auto stream = [&](auto&& take) {
-          bed.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
+          g.for_each_snp_region(locp->chrom, cstart, cend, mp, maf, [&](const SnpRec& s) {
             take(s);
             return true;
           });
@@ -135,5 +143,14 @@ void run_cis_bfile_parallel(const Options& opt, PhenoData& ph, const CovData& co
     for (auto& s : part[static_cast<size_t>(t)])
       summaries.push_back(std::move(s));
 }
+
+template void run_cis_parallel<PlinkBed>(const Options&, PhenoData&, const CovData&,
+                                         const std::unordered_map<std::string, GeneLoc>&,
+                                         Eigen::MatrixXd*, bool, bool, Model, ScopeOut&, double,
+                                         std::vector<GeneSummary>&, const std::string&);
+template void run_cis_parallel<VcfSession>(const Options&, PhenoData&, const CovData&,
+                                           const std::unordered_map<std::string, GeneLoc>&,
+                                           Eigen::MatrixXd*, bool, bool, Model, ScopeOut&, double,
+                                           std::vector<GeneSummary>&, const std::string&);
 
 } // namespace eqtl
