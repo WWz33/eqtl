@@ -101,7 +101,7 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
 
       gty.noalias() = Ys * g_s;
       std::fill(write_flag.begin(), write_flag.end(), 0);
-#pragma omp parallel for schedule(static) if (opt.threads > 1 && Gz > 32) num_threads(opt.threads)
+#pragma omp parallel for schedule(static) if (opt.threads > 1 && Gz > 32 && !omp_in_parallel()) num_threads(opt.threads)
       for (int gi = 0; gi < Gz; ++gi) {
         auto& job = jobs[static_cast<size_t>(gi)];
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;

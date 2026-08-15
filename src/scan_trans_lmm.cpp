@@ -141,7 +141,7 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       if (!std::isfinite(subset_maf_or_nan(g_buf, &maf_sub))) return true;
       g_til.noalias() = Q.transpose() * g_buf;
       std::fill(write_flag.begin(), write_flag.end(), 0);
-#pragma omp parallel if (opt.threads > 1 && jobs.size() > 32) num_threads(opt.threads)
+#pragma omp parallel if (opt.threads > 1 && jobs.size() > 32 && !omp_in_parallel()) num_threads(opt.threads)
       {
         LmmTestWs ws_t;
 #pragma omp for schedule(static)
