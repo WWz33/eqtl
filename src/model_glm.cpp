@@ -4,9 +4,27 @@
 
 namespace eqtl {
 
-// NB GLM, log link: Var = mu + phi*mu^2. --fast: fix phi from null.
+// NB GLM, log link: Var = mu + phi*mu^2. phi is the NB2 dispersion.
+// --fast: fix phi from the joint null MLE; otherwise re-estimate it between
+// IRLS rounds (MASS::glm.nb theta=1/phi alternation) so the fitted null is the
+// joint MLE — required for the score test to be a valid LRT/S-score.
 // Working response: z = log(mu) + (y-mu)/mu  (no offset in z; offset only in eta = Xb+offset)
 
+// NB2 dispersion MOM: E[((y-mu)^2 - mu)/mu^2] = phi  (since Var = mu + phi*mu^2).
+static double nb_mom_phi(const Eigen::VectorXd& y, const Eigen::VectorXd& mu, int df) {
+  double num = 0;
+  for (int i = 0; i < y.size(); ++i) {
+    const double m = std::max(mu(i), 1e-8);
+    num += ((y(i) - m) * (y(i) - m) - m) / (m * m);
+  }
+  return std::max(1e-8, num / static_cast<double>(std::max(1, df)));
+}
+
+// Outer alternation matches MASS::glm.nb: hold phi fixed, run IRLS to a beta
+// stationary point, then re-estimate phi by MoM and repeat until phi itself
+// stops moving. Fixes a real calibration bug in the previous version, which
+// held the initial phi=1 across the whole fit so the score test was applied
+// at a non-joint-null MLE (Var=mu+mu^2 rather than Var=mu+phi*mu^2).
 static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::VectorXd& offset,
                     double& phi, Eigen::VectorXd& beta, Eigen::VectorXd& mu, bool estimate_phi,
                     bool& converged) {
@@ -16,39 +34,41 @@ static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Ei
   beta = Eigen::VectorXd::Zero(p);
   mu = y.cwiseMax(0.1);
   converged = false;
-  for (int it = 0; it < 50; ++it) {
-    Eigen::VectorXd z(n), w(n);
-    for (int i = 0; i < n; ++i) {
-      const double m = std::max(mu(i), 1e-8);
-      const double var = m + phi * m * m;
-      w(i) = (m * m) / std::max(var, 1e-12);
-      // working response on eta scale without offset; design uses eta = Xb + offset
-      z(i) = std::log(m) + (y(i) - m) / m;
+  const int outer_max = estimate_phi ? 10 : 1;
+  for (int outer = 0; outer < outer_max; ++outer) {
+    // IRLS with phi fixed.
+    for (int it = 0; it < 50; ++it) {
+      Eigen::VectorXd z(n), w(n);
+      for (int i = 0; i < n; ++i) {
+        const double m = std::max(mu(i), 1e-8);
+        const double var = m + phi * m * m;
+        w(i) = (m * m) / std::max(var, 1e-12);
+        // working response on eta scale without offset; design uses eta = Xb + offset
+        z(i) = std::log(m) + (y(i) - m) / m;
+      }
+      // target: E[z] ≈ Xb + offset  ⇒  solve Xb ≈ z - offset
+      const Eigen::VectorXd rhs = z - offset;
+      const Eigen::MatrixXd XtWX = X.transpose() * w.asDiagonal() * X;
+      Eigen::LDLT<Eigen::MatrixXd> ldlt(XtWX);
+      if (ldlt.info() != Eigen::Success) return;
+      const Eigen::VectorXd beta_new = ldlt.solve(X.transpose() * (w.asDiagonal() * rhs));
+      const Eigen::VectorXd mu_new = (X * beta_new + offset).array().exp().matrix();
+      const double diff = (beta_new - beta).cwiseAbs().maxCoeff();
+      beta = beta_new;
+      mu = mu_new;
+      if (diff < 1e-6) break;
     }
-    // target: E[z] ≈ Xb + offset  ⇒  solve Xb ≈ z - offset
-    const Eigen::VectorXd rhs = z - offset;
-    const Eigen::MatrixXd XtWX = X.transpose() * w.asDiagonal() * X;
-    Eigen::LDLT<Eigen::MatrixXd> ldlt(XtWX);
-    if (ldlt.info() != Eigen::Success) break;
-    const Eigen::VectorXd beta_new = ldlt.solve(X.transpose() * (w.asDiagonal() * rhs));
-    const Eigen::VectorXd mu_new = (X * beta_new + offset).array().exp().matrix();
-    const double diff = (beta_new - beta).cwiseAbs().maxCoeff();
-    beta = beta_new;
-    mu = mu_new;
-    if (diff < 1e-6) {
+    if (!estimate_phi) { converged = true; return; }
+    // Re-estimate phi by MoM at the current beta/mu and check joint stationarity.
+    const double phi_new = nb_mom_phi(y, mu, df);
+    if (std::fabs(phi_new - phi) < 1e-6 * std::max(1.0, phi)) {
+      phi = phi_new;
       converged = true;
-      break;
+      return;
     }
+    phi = phi_new;
   }
-  // ponytail: alternate phi after beta IRLS (not joint inside each iter)
-  if (estimate_phi) {
-    double num = 0;
-    for (int i = 0; i < n; ++i) {
-      const double m = std::max(mu(i), 1e-8);
-      num += ((y(i) - m) * (y(i) - m) - m) / (m * m);
-    }
-    phi = std::max(1e-8, num / static_cast<double>(df));
-  }
+  converged = true;
 }
 
 GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, bool fast) {
