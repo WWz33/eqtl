@@ -205,9 +205,19 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     job.summary.acat_p = job.acat_acc.p();
     if (job.best.p <= pthr && job.best.p <= 1.0)
       write_pair_line(out.top, job.best, Model::Lmm, scope);
-    if (opt.perm > 0)
+    if (opt.perm > 0) {
+      // Mixed keeps: each job's stage-2 needs its own basis (gr.K was freed above
+      // and gr.basis never set, so prep_null would hit an empty K and abort).
+      // prep.Q/lambda hold this job's decomposition and are dead after the scan:
+      // move them into gr.basis so permutations reuse the basis instead of
+      // re-decomposing per permutation.
+      if (!have_shared_basis && !job.gr.has_basis) {
+        job.gr.basis.Q = std::move(job.prep.Q);
+        job.gr.basis.lambda = std::move(job.prep.lambda);
+        job.gr.has_basis = true;
+      }
       stage2_perm_topk(opt, Model::Lmm, job, have_shared_basis ? &shared_basis : nullptr);
-    else {
+    } else {
       job.summary.p_emp = std::numeric_limits<double>::quiet_NaN();
       job.summary.p_beta = std::numeric_limits<double>::quiet_NaN();
     }
