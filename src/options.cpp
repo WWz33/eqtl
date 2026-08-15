@@ -90,6 +90,7 @@ void print_help() {
     << "        --pval-trans FLOAT trans/gw output p threshold  [1e-5]\n"
     << "        --miss-hand STR    filter|impute missing GT  [impute]\n"
     << "        --max-miss FLOAT   drop SNP if missing fraction > value  [0.8]\n"
+    << "                           (1.0 matches GCTA --geno 1.0 keep-all default)\n"
     << "        --maf FLOAT        min MAF on analysis samples  [0=off]\n"
     << "        --fast             sparse GRM approx (LMM); glm/glmm: fix null phi/sigma2\n"
     << "\n"
