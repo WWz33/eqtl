@@ -63,6 +63,15 @@ GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, bool
   Eigen::VectorXd beta, mu;
   nb_irls(y, X, p.offset, p.phi, beta, mu, true, p.converged);
   p.mu = mu;
+  // Null working weights and inverse Fisher info, reused by the per-SNP score
+  // test so each SNP is one matrix-vector instead of a full IRLS refit.
+  p.w.resize(p.n);
+  for (int i = 0; i < p.n; ++i) {
+    const double m = std::max(mu(i), 1e-8);
+    p.w(i) = m / (1.0 + p.phi * m);
+  }
+  const Eigen::MatrixXd XtWX = X.transpose() * p.w.asDiagonal() * X;
+  p.XtWX_inv = XtWX.ldlt().solve(Eigen::MatrixXd::Identity(X.cols(), X.cols()));
   return p;
 }
 
@@ -70,42 +79,33 @@ AssocHit test_glm_nb(const GenePrepGlm& prep, const Eigen::VectorXd& g) {
   AssocHit h;
   h.n = prep.n;
   h.has_phi = true;
+  h.phi = prep.phi;
+  h.glm_converged = prep.converged;
+  if (!prep.converged) {
+    h.p = std::numeric_limits<double>::quiet_NaN();
+    return h;
+  }
   const double gvar = g.array().square().mean() - std::pow(g.mean(), 2);
   if (gvar < 1e-12) {
     h.p = 1.0;
     return h;
   }
-  Eigen::MatrixXd Xg(prep.n, prep.X.cols() + 1);
-  Xg.leftCols(prep.X.cols()) = prep.X;
-  Xg.col(prep.X.cols()) = g;
-  double phi = prep.phi;
-  Eigen::VectorXd beta, mu;
-  bool conv = false;
-  nb_irls(prep.y, Xg, prep.offset, phi, beta, mu, !prep.fast, conv);
-  h.phi = phi;
-  h.glm_converged = conv;
-  h.beta = beta(prep.X.cols());
-  if (!conv) {
-    h.p = std::numeric_limits<double>::quiet_NaN();
-    return h;
-  }
-  Eigen::VectorXd w(prep.n);
-  for (int i = 0; i < prep.n; ++i) {
-    const double m = std::max(mu(i), 1e-8);
-    const double var = m + phi * m * m;
-    w(i) = (m * m) / std::max(var, 1e-12);
-  }
-  const Eigen::MatrixXd XtWX = Xg.transpose() * w.asDiagonal() * Xg;
-  Eigen::LDLT<Eigen::MatrixXd> ldlt(XtWX);
-  if (ldlt.info() != Eigen::Success) {
+  // Score test at the null (beta_g = 0), phi fixed at the null estimate:
+  //   U   = g^T (y - mu) / (1 + phi*mu)
+  //   inf = g^T W g - (X^T W g)^T (X^T W X)^-1 (X^T W g),  W = mu/(1+phi*mu)
+  Eigen::VectorXd resid(prep.n);
+  for (int i = 0; i < prep.n; ++i)
+    resid(i) = (prep.y(i) - prep.mu(i)) / (1.0 + prep.phi * prep.mu(i));
+  const double U = g.dot(resid);
+  const Eigen::VectorXd XtWg = prep.X.transpose() * (prep.w.asDiagonal() * g);
+  const double info = g.dot(prep.w.asDiagonal() * g) - XtWg.dot(prep.XtWX_inv * XtWg);
+  if (info < 1e-12) {
     h.p = 1.0;
     return h;
   }
-  Eigen::VectorXd e = Eigen::VectorXd::Zero(Xg.cols());
-  e(prep.X.cols()) = 1.0;
-  const Eigen::VectorXd cov_col = ldlt.solve(e);
-  h.se = std::sqrt(std::max(cov_col(prep.X.cols()), 0.0));
-  h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
+  h.beta = U / info; // one-step estimator from the null
+  h.se = 1.0 / std::sqrt(info);
+  h.stat = U / std::sqrt(info);
   h.p = pnorm_two_sided(h.stat);
   h.r2 = 0;
   return h;

@@ -72,6 +72,8 @@ struct GenePrepGlm {
   Eigen::MatrixXd X;
   Eigen::VectorXd offset;
   Eigen::VectorXd mu; // null fitted mean (for parametric permutation)
+  Eigen::VectorXd w;  // null working weights mu/(1+phi*mu)
+  Eigen::MatrixXd XtWX_inv; // inverse null Fisher info for covariates
   double phi = 1;
   bool fast = false;
   bool converged = true;
