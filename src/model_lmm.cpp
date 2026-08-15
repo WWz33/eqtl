@@ -132,17 +132,21 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const L
   p.X_til = p.Q.transpose() * X;
   p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
   fill_dinv(p);
-  // null weighted RSS (X only) for partial R²
+  // null weighted RSS (X only) for partial R² and bordered-Schur caches.
   {
-    Eigen::MatrixXd XtDX0 = p.X_til.transpose() * p.dinv.asDiagonal() * p.X_til;
-    Eigen::VectorXd XtDy0 = p.X_til.transpose() * (p.dinv.asDiagonal() * p.y_til);
-    Eigen::LDLT<Eigen::MatrixXd> ldlt0(XtDX0);
-    if (ldlt0.info() == Eigen::Success) {
-      const Eigen::VectorXd b0 = ldlt0.solve(XtDy0);
-      p.rss_null = p.y_til.dot(p.dinv.asDiagonal() * p.y_til) - XtDy0.dot(b0);
+    Eigen::MatrixXd A00 = p.X_til.transpose() * p.dinv.asDiagonal() * p.X_til;
+    const Eigen::VectorXd Dy_til = p.dinv.asDiagonal() * p.y_til;
+    Eigen::VectorXd XtDy0 = p.X_til.transpose() * Dy_til;
+    p.y_dy = p.y_til.dot(Dy_til);
+    p.ldlt_a00 = Eigen::LDLT<Eigen::MatrixXd>(A00);
+    if (p.ldlt_a00.info() == Eigen::Success) {
+      p.chi0 = p.ldlt_a00.solve(XtDy0);
+      p.rss_null = p.y_dy - XtDy0.dot(p.chi0);
       if (p.rss_null < 0) p.rss_null = 0;
+      p.has_a00 = true;
     } else {
-      p.rss_null = p.y_til.dot(p.dinv.asDiagonal() * p.y_til);
+      p.rss_null = p.y_dy;
+      p.has_a00 = false;
     }
   }
   return p;
@@ -156,29 +160,55 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const E
 AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   AssocHit h;
   h.n = prep.n;
-  const Eigen::VectorXd g_til = prep.Q.transpose() * g;
+  const int df = prep.n - prep.p - 1;
 
+  if (prep.has_a00) {
+    // Bordered information-matrix Schur path. The gene-constant blocks —
+    // A00 = X_til^T D X_til (factored once into ldlt_a00), chi0 = A00^{-1}
+    // X_til^T D y_til, rss_null, and y_dy — are cached at prep. Per SNP we
+    // only pay: Q^T g (np), D·g_til (n), a = X_til^T (D g_til) (np), one
+    // p-dimensional triangular solve reusing ldlt_a00 (p²), and a few scalar
+    // dot products. The slow path's (p+1)×(p+1) product and repeat LDLT are
+    // removed; any SNP-related near-singularity is caught via the Schur S.
+    const Eigen::VectorXd g_til = prep.Q.transpose() * g;
+    const Eigen::VectorXd Dg = prep.dinv.cwiseProduct(g_til);
+    const double gg = Dg.dot(g_til);
+    if (gg < 1e-12) { h.p = 1.0; return h; }
+    const Eigen::VectorXd a = prep.X_til.transpose() * Dg;   // X_til^T D g_til
+    const double yg = Dg.dot(prep.y_til);                    // y_til^T D g_til
+    const Eigen::VectorXd u = prep.ldlt_a00.solve(a);        // A00^{-1} a
+    const double aTu = a.dot(u);
+    const double S = gg - aTu;                               // Schur complement
+    if (S <= 1e-15) { h.p = 1.0; return h; }
+    const double bg = (yg - a.dot(prep.chi0)) / S;          // Wald slope
+    // RSS_full = rss_null - S · bg² (bordered elimination of the SNP row);
+    // rss_null = y_dy − XtDy0·chi0 is precomputed, β_NS = chi0 − bg·u.
+    double q = prep.rss_null - S * bg * bg;
+    if (q < 0) q = 0;
+    const double sigma2 = (df > 0) ? (q / df) : 1.0;
+    h.beta = bg;
+    h.se = std::sqrt(std::max(sigma2 / S, 0.0));
+    h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
+    h.p = p_from_t(h.stat, df);
+    h.r2 = (prep.rss_null > 1e-15) ? std::max(0.0, 1.0 - q / prep.rss_null) : 0.0;
+    return h;
+  }
+
+  // Slow path: rebuild full (p+1)×(p+1) information matrix (kept for the
+  // rare case where LDLT(A00) failed at prep time or no cache was built).
+  const Eigen::VectorXd g_til = prep.Q.transpose() * g;
   Eigen::MatrixXd Xg(prep.n, prep.p + 1);
   Xg.leftCols(prep.p) = prep.X_til;
   Xg.col(prep.p) = g_til;
-
   const Eigen::VectorXd& dinv = prep.dinv;
-  // near-null SNP variance in spectral space → skip unstable fit
   const double g_wss = g_til.dot(dinv.asDiagonal() * g_til);
-  if (g_wss < 1e-12) {
-    h.p = 1.0;
-    return h;
-  }
+  if (g_wss < 1e-12) { h.p = 1.0; return h; }
   Eigen::MatrixXd XtDX = Xg.transpose() * dinv.asDiagonal() * Xg;
   Eigen::VectorXd XtDy = Xg.transpose() * (dinv.asDiagonal() * prep.y_til);
   Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
-  if (ldlt.info() != Eigen::Success) {
-    h.p = 1.0;
-    return h;
-  }
+  if (ldlt.info() != Eigen::Success) { h.p = 1.0; return h; }
   const Eigen::VectorXd beta = ldlt.solve(XtDy);
   h.beta = beta(prep.p);
-  const int df = prep.n - prep.p - 1;
   double q = prep.y_til.dot(dinv.asDiagonal() * prep.y_til) - XtDy.dot(beta);
   if (q < 0) q = 0;
   const double sigma2 = (df > 0) ? (q / df) : 1.0;
@@ -188,7 +218,6 @@ AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   h.se = std::sqrt(std::max(sigma2 * cov_col(prep.p), 0.0));
   h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
   h.p = p_from_t(h.stat, df);
-  // partial R²: 1 - RSS_full / RSS_null (null = covariates only; matches LM y_s style)
   h.r2 = (prep.rss_null > 1e-15) ? std::max(0.0, 1.0 - q / prep.rss_null) : 0.0;
   return h;
 }

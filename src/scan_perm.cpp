@@ -46,18 +46,28 @@ void stage2_perm_topk(const Options& opt, Model model, Job& job,
   prep_null(model, opt.fast, grb, &lm_c, &lmm_c, &glm_c, &glmm_c);
 
   Eigen::VectorXd y_perm_base = grb.y;
+  Eigen::VectorXd Xb0_til;   // LMM only: precomputed null-fitted spectral mean
   if (model == Model::Lm && lm_c.n > 0) {
     y_perm_base = lm_c.y_s;
   } else if (model == Model::Lmm && lmm_c.n > 0) {
     // whitened spectral residuals: Var(w_i) = σ² under null → exchangeable
     const Eigen::VectorXd& dinv = lmm_c.dinv;
-    Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
-    Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
-    Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
-    if (ldlt.info() == Eigen::Success) {
-      const Eigen::VectorXd b0 = ldlt.solve(XtDy);
-      const Eigen::VectorXd r_til = lmm_c.y_til - lmm_c.X_til * b0;
+    if (lmm_c.has_a00) {
+      // prep_lmm has already cached chi0 = A00^{-1} X_til^T D y_til; reuse it
+      // instead of re-forming and re-factoring A00 here.
+      Xb0_til = lmm_c.X_til * lmm_c.chi0;
+      const Eigen::VectorXd r_til = lmm_c.y_til - Xb0_til;
       y_perm_base = r_til.cwiseProduct(dinv.cwiseSqrt());
+    } else {
+      Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
+      Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
+      Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+      if (ldlt.info() == Eigen::Success) {
+        const Eigen::VectorXd b0 = ldlt.solve(XtDy);
+        Xb0_til = lmm_c.X_til * b0;
+        const Eigen::VectorXd r_til = lmm_c.y_til - Xb0_til;
+        y_perm_base = r_til.cwiseProduct(dinv.cwiseSqrt());
+      }
     }
   }
 
@@ -79,17 +89,29 @@ void stage2_perm_topk(const Options& opt, Model model, Job& job,
       for (int i = 0; i < y_perm_base.size(); ++i)
         grb2.y(i) = y_perm_base(idx[static_cast<size_t>(i)]);
       if (model == Model::Lmm && lmm_c.n > 0 && lmm_c.Q.size() > 0) {
+        // b0 = A00^{-1} X_til^T D y_til (permutation-invariant, cached as
+        // lmm_c.chi0; X_til * b0 cached once as Xb0_til before this loop).
+        // Re-deriving it inside the loop was pure waste.
         const Eigen::VectorXd& dinv = lmm_c.dinv;
-        Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
-        Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
-        Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
-        if (ldlt.info() == Eigen::Success) {
-          const Eigen::VectorXd b0 = ldlt.solve(XtDy);
-          // grb2.y holds shuffled whitened residuals w_perm; un-whiten → spectral residual
+        if (lmm_c.has_a00 && Xb0_til.size() == dinv.size()) {
+          // grb2.y holds shuffled whitened residuals w_perm → un-whiten to
+          // spectral residuals, add the null-fitted spectral mean, project back
+          // to the sample domain so prep_null (on grb2) treats it as a y.
           Eigen::VectorXd r_til_perm(grb2.y.size());
           for (int i = 0; i < grb2.y.size(); ++i)
             r_til_perm(i) = grb2.y(i) / std::sqrt(std::max(dinv(i), 1e-12));
-          grb2.y = lmm_c.Q * (lmm_c.X_til * b0 + r_til_perm);
+          grb2.y = lmm_c.Q * (Xb0_til + r_til_perm);
+        } else {
+          Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
+          Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
+          Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+          if (ldlt.info() == Eigen::Success) {
+            const Eigen::VectorXd b0 = ldlt.solve(XtDy);
+            Eigen::VectorXd r_til_perm(grb2.y.size());
+            for (int i = 0; i < grb2.y.size(); ++i)
+              r_til_perm(i) = grb2.y(i) / std::sqrt(std::max(dinv(i), 1e-12));
+            grb2.y = lmm_c.Q * (lmm_c.X_til * b0 + r_til_perm);
+          }
         }
       }
       GenePrepLm lm_b;

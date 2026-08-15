@@ -58,6 +58,19 @@ struct GenePrepLmm {
   double rss_null = 0; // weighted null RSS (covariates only) → partial R² denom
   int n = 0;
   int p = 0;
+  // Per-SNP Wald hot-path caches. The bordered information matrix is
+  //   M = [ A00   a ]      a   = X_til^T D g_til   (p)
+  //       [ a^T  gg ],     gg  = g_til^T D g_til   (scalar)
+  // with constant gene blocks A00 = X_til^T D X_til (p×p), y_dy =
+  // y_til^T D y_til (scalar), XtDy0 = X_til^T D y_til (p), and precomputed
+  // chi0 = A00^{-1} XtDy0 (p). LDLT of A00 is factored once and reused at
+  // every SNP via the bordered Schur complement, eliminating the per-SNP
+  // (p+1)×(p+1) product and factorization. has_a00 is false when the LDLT
+  // failed at prep time, in which case test_lmm falls back to the slow path.
+  bool has_a00 = false;
+  Eigen::LDLT<Eigen::MatrixXd> ldlt_a00{Eigen::MatrixXd(0,0)};
+  Eigen::VectorXd chi0;       // A00^{-1} XtDy0
+  double y_dy = 0.0;          // y_til^T D y_til
 };
 
 // Null REML for delta on X only; SNP tests use fixed delta + Wald.

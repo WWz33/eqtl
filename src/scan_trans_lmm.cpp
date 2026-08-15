@@ -13,6 +13,33 @@ static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_
   AssocHit h;
   h.n = prep.n;
   h.maf = maf_sub;
+  const int df = prep.n - prep.p - 1;
+
+  if (prep.has_a00) {
+    // Same bordered-Schur hot path as test_lmm but skips the Q^T g
+    // projection (it is done once per SNP, SNP-outer, upstream of this call).
+    ws.Dg.noalias() = prep.dinv.cwiseProduct(g_til);
+    const double gg = ws.Dg.dot(g_til);
+    if (gg < 1e-12) { h.p = 1.0; return h; }
+    Eigen::VectorXd a = prep.X_til.transpose() * ws.Dg;      // X_til^T D g_til (p)
+    const double yg = ws.Dg.dot(prep.y_til);                 // y_til^T D g_til
+    ws.u = prep.ldlt_a00.solve(a);                           // A00^{-1} a (p²)
+    const double aTu = a.dot(ws.u);
+    const double S = gg - aTu;
+    if (S <= 1e-15) { h.p = 1.0; return h; }
+    const double bg = (yg - a.dot(prep.chi0)) / S;
+    double q = prep.rss_null - S * bg * bg;
+    if (q < 0) q = 0;
+    const double sigma2 = (df > 0) ? (q / df) : 1.0;
+    h.beta = bg;
+    h.se = std::sqrt(std::max(sigma2 / S, 0.0));
+    h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
+    h.p = p_from_t(h.stat, df);
+    h.r2 = (prep.rss_null > 1e-15) ? std::max(0.0, 1.0 - q / prep.rss_null) : 0.0;
+    return h;
+  }
+
+  // Slow path (LDLT(A00) failed at prep, or unmodified callers).
   const int p1 = prep.p + 1;
   if (ws.Xg.rows() != prep.n || ws.Xg.cols() != p1) ws.Xg.resize(prep.n, p1);
   ws.Xg.leftCols(prep.p) = prep.X_til;
@@ -28,7 +55,6 @@ static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_
   if (ldlt.info() != Eigen::Success) { h.p = 1.0; return h; }
   ws.beta = ldlt.solve(ws.XtDy);
   h.beta = ws.beta(prep.p);
-  const int df = prep.n - prep.p - 1;
   double q = prep.y_til.dot(dinv.asDiagonal() * prep.y_til) - ws.XtDy.dot(ws.beta);
   if (q < 0) q = 0;
   const double sigma2 = (df > 0) ? (q / df) : 1.0;
