@@ -35,7 +35,12 @@ struct GenePrepLm {
   int n = 0;
   int p = 0;
   double yty = 0; // ||y_s||^2
+  bool ok = true; // false ⇒ X rank-deficient for this gene (tests return NaN p)
 };
+
+// LDLT has no reliable rank-deficiency reporting; verify the computed inverse by
+// reconstruction (scale-invariant). Returns false when X'X is not invertible.
+bool ldlt_inv_ok(const Eigen::MatrixXd& XtX, Eigen::MatrixXd& inv);
 
 GenePrepLm prep_lm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X);
 AssocHit test_lm(const GenePrepLm& prep, const Eigen::VectorXd& g);
@@ -68,6 +73,7 @@ struct GenePrepLmm {
   // (p+1)×(p+1) product and factorization. has_a00 is false when the LDLT
   // failed at prep time, in which case test_lmm falls back to the slow path.
   bool has_a00 = false;
+  bool ok = true; // false ⇒ covariates rank-deficient for this gene (tests return NaN p)
   Eigen::LDLT<Eigen::MatrixXd> ldlt_a00{Eigen::MatrixXd(0,0)};
   Eigen::VectorXd chi0;       // A00^{-1} XtDy0
   double y_dy = 0.0;          // y_til^T D y_til

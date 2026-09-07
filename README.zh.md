@@ -59,8 +59,8 @@ eqtl fission [options]
 | `-k, --grm` | — | GRM 前缀（`.grm.id`/`.grm.bin`） |
 | `--make-grm` | 关 | 写 GRM 后退出 |
 | `-m, --mode` | all | `cis`/`trans`/`gw`/`all` |
-| `--model` | lmm | `lm`,`lmm`,`glm`,`glmm`（逗号分隔） |
-| `-w, --window` | 1000000 | cis 窗口 ± TSS（bp） |
+| `--model` | lmm | `lm`,`lmm`,`glm`,`glmm`（逗号分隔；glm/glmm 仅支持 cis） |
+| `-w, --window` | 1000000 | cis 窗口：基因主体 ± window（bp）；与 QTLtools nominal 一致 |
 | `--pval-cis` | 1e-5 | pairs 阈值（cis） |
 | `--pval-trans` | 1e-5 | pairs 阈值（trans/gw） |
 | `--maf` | 0 | 最小 effect 等位基因频率 |

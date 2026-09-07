@@ -13,6 +13,10 @@ static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_
   AssocHit h;
   h.n = prep.n;
   h.maf = maf_sub;
+  if (!prep.ok) {
+    h.p = std::numeric_limits<double>::quiet_NaN();
+    return h;
+  }
   const int df = prep.n - prep.p - 1;
 
   if (prep.has_a00) {

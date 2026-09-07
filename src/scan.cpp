@@ -52,6 +52,20 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
                   const std::vector<std::string>& sample_order) {
   CovData cov = load_covar(opt.covar, sample_order);
   geno.set_sample_order(sample_order);
+  {
+    // Fail fast on rank-deficient covariates; otherwise every gene's prep would
+    // mark itself untestable one by one mid-scan. Non-finite covariate values
+    // (e.g. "nan" cells) are legal: build_gene_ready drops those rows per gene,
+    // so only run the global check on a fully finite matrix — the per-gene
+    // subset rank guard covers the rest.
+    if (cov.X.allFinite()) {
+      const Eigen::MatrixXd xtX = cov.X.transpose() * cov.X;
+      Eigen::MatrixXd dummy;
+      if (!ldlt_inv_ok(xtX, dummy))
+        die("covariate matrix is rank-deficient (collinear or duplicate columns); "
+            "fix --covar before scanning");
+    }
+  }
 
   std::unordered_map<std::string, GeneLoc> annot;
   const bool have_gff = !opt.gff.empty();
@@ -136,20 +150,30 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
     const bool need_k = needs_grm(model);
     const bool need_lmm_basis = (model == Model::Lmm);
 
+    bool any_scope_ran = false;
     for (const std::string& scope : scopes) {
+      // count models have no SNP-outer trans/gw path: gene-outer would rescan
+      // the whole genotype stream per gene (days), and the trans permutation
+      // cache assumes cis windows. Skip with a clear warning.
+      if ((model == Model::Glm || model == Model::Glmm) && scope != "cis") {
+        warn(model_str(model) + ": skipping " + scope + " scope (count models support cis only)");
+        continue;
+      }
+      any_scope_ran = true;
       const std::string prefix = opt.out + "." + model_str(model) + "." + scope;
       ScopeOut so;
       so.tag = scope;
+      so.pairs_buf.assign(4 << 20, 0);
+      so.top_buf.assign(1 << 16, 0);
+      so.region_buf.assign(1 << 16, 0);
+      // libstdc++ setbuf() is a no-op once the stream is open — buffers first.
+      so.pairs.rdbuf()->pubsetbuf(so.pairs_buf.data(), so.pairs_buf.size());
+      so.top.rdbuf()->pubsetbuf(so.top_buf.data(), so.top_buf.size());
+      so.region.rdbuf()->pubsetbuf(so.region_buf.data(), so.region_buf.size());
       so.pairs.open(prefix + ".pairs.tsv");
       so.top.open(prefix + ".top.tsv");
       so.region.open(prefix + ".region.tsv");
       if (!so.pairs || !so.top || !so.region) die("cannot open output for " + prefix);
-      so.pairs_buf.assign(4 << 20, 0);
-      so.top_buf.assign(1 << 16, 0);
-      so.region_buf.assign(1 << 16, 0);
-      so.pairs.rdbuf()->pubsetbuf(so.pairs_buf.data(), so.pairs_buf.size());
-      so.top.rdbuf()->pubsetbuf(so.top_buf.data(), so.top_buf.size());
-      so.region.rdbuf()->pubsetbuf(so.region_buf.data(), so.region_buf.size());
       write_pairs_header(so.pairs, model);
       write_top_header(so.top, model);
       write_region_header(so.region);
@@ -263,7 +287,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
             std::iota(gr.keep.begin(), gr.keep.end(), 0);
             gr.y = y;
             gr.X = cov.X;
-            gr.basis = grm_basis;
+            gr.basis_ref = &grm_basis;  // shared; avoids a per-gene n×n Q copy
             gr.has_basis = true;
           } else {
             if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
@@ -307,6 +331,9 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
       for (const auto& s : summaries) write_region_line(so.region, s);
       info("finished " + prefix);
     }
+    if (!any_scope_ran)
+      die("nothing to run: model " + model_str(model) + " with --mode " + mode_str(opt.mode) +
+          " has no valid scope (glm/glmm support cis only)");
   }
   return 0;
 }

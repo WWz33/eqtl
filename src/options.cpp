@@ -1,5 +1,7 @@
 #include "eqtl/options.hpp"
 #include "eqtl/util.hpp"
+#include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -7,6 +9,31 @@
 #include <getopt.h>
 
 namespace eqtl {
+
+namespace {
+
+// atoi/atof silently truncate ("--window 1e6" → 1) — parse strictly and die on junk.
+int parse_int_strict(const char* s, const char* flag) {
+  errno = 0;
+  char* end = nullptr;
+  const long v = std::strtol(s, &end, 10);
+  if (errno != 0 || end == s || *end != '\0')
+    die(std::string(flag) + ": invalid integer '" + s + "'");
+  if (v < INT_MIN || v > INT_MAX)
+    die(std::string(flag) + ": value '" + s + "' out of int range");
+  return static_cast<int>(v);
+}
+
+double parse_double_strict(const char* s, const char* flag) {
+  errno = 0;
+  char* end = nullptr;
+  const double v = std::strtod(s, &end);
+  if (errno != 0 || end == s || *end != '\0' || !std::isfinite(v))
+    die(std::string(flag) + ": invalid number '" + s + "'");
+  return v;
+}
+
+} // namespace
 
 static Model parse_one_model(const std::string& s) {
   if (s == "lm") return Model::Lm;
@@ -65,7 +92,10 @@ const char* pheno_norm_str(PhenNorm p) {
 }
 
 void print_version() {
-  std::cout << "eqtl 0.1.0\n";
+#ifndef EQTL_VERSION
+#define EQTL_VERSION "v0.1.0"
+#endif
+  std::cout << "eqtl " << EQTL_VERSION << "\n";
 }
 
 void print_help() {
@@ -89,6 +119,7 @@ void print_help() {
     << "        --make-grm         write relatedness matrix and exit\n"
     << "    -m, --mode STR         cis|trans|all|gw  [all]\n"
     << "        --model STR        lm|glm|lmm|glmm[,...]  [lmm]\n"
+    << "                           (glm/glmm only support --mode cis)\n"
     << "    -w, --window INT       cis flank around gene body (bp)  [1000000]\n"
     << "        --pval-cis FLOAT   cis output p threshold  [1e-5]\n"
     << "        --pval-trans FLOAT trans/gw output p threshold  [1e-5]\n"
@@ -191,39 +222,39 @@ int parse_options(int argc, char** argv, Options& opt) {
       case 'c': opt.covar = optarg; break;
       case 'k': opt.grm = optarg; break;
       case 'm': opt.mode = parse_mode(optarg); break;
-      case 'w': opt.window = std::atoi(optarg); break;
-      case 't': opt.threads = std::max(1, std::atoi(optarg)); break;
+      case 'w': opt.window = parse_int_strict(optarg, "-w/--window"); break;
+      case 't': opt.threads = std::max(1, parse_int_strict(optarg, "-t/--thread")); break;
       case 'h': opt.help = true; break;
       case 1001: opt.gff_id_key = optarg; break;
       case 1002: opt.make_grm = true; break;
       case 1003: opt.models = parse_models(optarg); break;
-      case 1004: opt.pval_cis = std::atof(optarg); break;
-      case 1005: opt.pval_trans = std::atof(optarg); break;
+      case 1004: opt.pval_cis = parse_double_strict(optarg, "--pval-cis"); break;
+      case 1005: opt.pval_trans = parse_double_strict(optarg, "--pval-trans"); break;
       case 1006:
         if (std::string(optarg) == "filter") opt.miss = MissHand::Filter;
         else if (std::string(optarg) == "impute") opt.miss = MissHand::Impute;
         else die("invalid --miss-hand (filter|impute)");
         break;
       case 1007: opt.fast = true; break;
-      case 1008: opt.perm = std::atoi(optarg); break;
+      case 1008: opt.perm = parse_int_strict(optarg, "--perm"); if (opt.perm < 0) die("--perm must be >= 0"); break;
       case 1020:
-        opt.perm_trans_thr = std::atof(optarg);
+        opt.perm_trans_thr = parse_double_strict(optarg, "--perm-trans-thr");
         if (opt.perm_trans_thr <= 0 || opt.perm_trans_thr > 1)
           die("--perm-trans-thr must be in (0,1]");
         break;
       case 1021:
-        opt.perm_trans_top = std::atoi(optarg);
+        opt.perm_trans_top = parse_int_strict(optarg, "--perm-trans-top");
         if (opt.perm_trans_top < 1) die("--perm-trans-top must be >= 1");
         break;
-      case 1009: opt.seed = std::atoi(optarg); break;
+      case 1009: opt.seed = parse_int_strict(optarg, "--seed"); break;
       case 1010: opt.disable_beta_approx = true; break;
       case 1011: opt.version = true; break;
       case 1012:
-        opt.max_miss = std::atof(optarg);
+        opt.max_miss = parse_double_strict(optarg, "--max-miss");
         if (opt.max_miss < 0.0 || opt.max_miss > 1.0) die("--max-miss must be in [0,1]");
         break;
       case 1013:
-        opt.maf = std::atof(optarg);
+        opt.maf = parse_double_strict(optarg, "--maf");
         if (opt.maf < 0.0 || opt.maf > 0.5) die("--maf must be in [0,0.5]");
         break;
       case 1022:
@@ -234,20 +265,20 @@ int parse_options(int argc, char** argv, Options& opt) {
         else die("invalid --pheno-norm (none|int)");
         break;
       case 1014:
-        opt.peer_factors = std::atoi(optarg);
+        opt.peer_factors = parse_int_strict(optarg, "--peer-factors");
         if (opt.peer_factors < 1) die("--peer-factors must be >= 1");
         break;
       case 1015:
-        opt.fission_epsilon = std::atof(optarg);
+        opt.fission_epsilon = parse_double_strict(optarg, "--epsilon");
         if (opt.fission_epsilon <= 0.0 || opt.fission_epsilon >= 1.0)
           die("--epsilon must be in (0,1)");
         break;
       case 1016:
-        opt.fission_max_iter = std::atoi(optarg);
+        opt.fission_max_iter = parse_int_strict(optarg, "--fission-max-iter");
         if (opt.fission_max_iter < 1) die("--fission-max-iter must be >= 1");
         break;
       case 1017:
-        opt.fission_tol = std::atof(optarg);
+        opt.fission_tol = parse_double_strict(optarg, "--fission-tol");
         if (opt.fission_tol <= 0.0) die("--fission-tol must be > 0");
         break;
       default:

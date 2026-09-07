@@ -1,5 +1,6 @@
 #include "eqtl/models.hpp"
 #include "eqtl/util.hpp"
+#include <atomic>
 #include <cmath>
 #include <algorithm>
 
@@ -139,12 +140,20 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const L
     Eigen::VectorXd XtDy0 = p.X_til.transpose() * Dy_til;
     p.y_dy = p.y_til.dot(Dy_til);
     p.ldlt_a00 = Eigen::LDLT<Eigen::MatrixXd>(A00);
-    if (p.ldlt_a00.info() == Eigen::Success) {
-      p.chi0 = p.ldlt_a00.solve(XtDy0);
+    // LDLT does not flag singular-but-factorizable input; verify the solve.
+    Eigen::VectorXd chi0_check = p.ldlt_a00.solve(XtDy0);
+    if (p.ldlt_a00.info() == Eigen::Success &&
+        (A00 * chi0_check - XtDy0).cwiseAbs().maxCoeff() <=
+            1e-8 * std::max(1.0, XtDy0.cwiseAbs().maxCoeff())) {
+      p.chi0 = chi0_check;
       p.rss_null = p.y_dy - XtDy0.dot(p.chi0);
       if (p.rss_null < 0) p.rss_null = 0;
       p.has_a00 = true;
     } else {
+      static std::atomic<int> warned{0};
+      if (!warned.exchange(1))
+        warn("lmm: rank-deficient covariates for at least one gene; p=NaN for its SNPs");
+      p.ok = false;
       p.rss_null = p.y_dy;
       p.has_a00 = false;
     }
@@ -160,7 +169,17 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const E
 AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   AssocHit h;
   h.n = prep.n;
+  if (!prep.ok) {
+    h.p = std::numeric_limits<double>::quiet_NaN();
+    return h;
+  }
   const int df = prep.n - prep.p - 1;
+  if (df <= 0) {
+    static std::atomic<int> warned_df{0};
+    if (!warned_df.exchange(1))
+      warn("lmm: n - p - 1 <= 0 for at least one gene (too few samples or too many covariates); "
+           "p=1 for its SNPs");
+  }
 
   if (prep.has_a00) {
     // Bordered information-matrix Schur path. The gene-constant blocks —

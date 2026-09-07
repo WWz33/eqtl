@@ -229,9 +229,12 @@ bool VcfSession::parse_record(void* rec_v, const MissPolicy& miss, SnpRec& out) 
       if (col < 0 || col >= ns_all) return false;
       const int32_t a0 = gt_[col * max_pl];
       const int32_t a1 = (max_pl > 1) ? gt_[col * max_pl + 1] : bcf_int32_vector_end;
-      bool miss_gt = bcf_gt_is_missing(a0);
-      if (!miss_gt && max_pl > 1 && a1 != bcf_int32_vector_end && a1 != bcf_int32_missing)
-        miss_gt = bcf_gt_is_missing(a1);
+      // "./1" 与 "1/." 均为缺失 —— htslib 以 bcf_int32_missing(INT32_MIN)编码任一
+      // 缺失等位;bcf_gt_is_missing 仅识别 bcf_gt_missing(0),不够。任一 allele
+      // 值为 bcf_int32_missing 即判缺失,避免把单等位 GT 错当 haploid 0/1。
+      bool miss_gt = (a0 == bcf_int32_missing || bcf_gt_is_missing(a0));
+      if (!miss_gt && max_pl > 1 && a1 != bcf_int32_vector_end)
+        miss_gt = (a1 == bcf_int32_missing || bcf_gt_is_missing(a1));
       if (miss_gt) {
         out.dosage[static_cast<size_t>(i)] = std::numeric_limits<double>::quiet_NaN();
         if (out.miss_mask.empty()) out.miss_mask.assign(static_cast<size_t>(n_an), 0);

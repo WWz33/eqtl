@@ -87,26 +87,22 @@ static void fmt_na_or(char* out, size_t n, double v) {
 }
 
 void write_region_line(std::ostream& os, const GeneSummary& g) {
-  char p_emp[32], p_beta[32], q_bh[32], buf[512];
+  char p_emp[32], p_beta[32], q_bh[32], s1[32], s2[32], buf[512];
   fmt_na_or(p_emp, sizeof(p_emp), g.p_emp);
   fmt_na_or(p_beta, sizeof(p_beta), g.p_beta);
   fmt_na_or(q_bh, sizeof(q_bh), g.q_bh);
+  fmt_na_or(s1, sizeof(s1), g.beta_shape1);
+  fmt_na_or(s2, sizeof(s2), g.beta_shape2);
   const int n = std::snprintf(
-      buf, sizeof(buf), "%s\t%s\t%lld\t%d\t%d\t%.10g\t%s\t%s\t%s\t%.10g\t%.10g\n", g.gene.c_str(),
+      buf, sizeof(buf), "%s\t%s\t%lld\t%d\t%d\t%.10g\t%s\t%s\t%s\t%s\t%s\n", g.gene.c_str(),
       g.chrom.c_str(), static_cast<long long>(g.tss), g.n_tested, g.n_sig, g.acat_p, q_bh, p_emp,
-      p_beta, g.beta_shape1, g.beta_shape2);
+      p_beta, s1, s2);
   if (n > 0 && static_cast<size_t>(n) < sizeof(buf)) {
     os.write(buf, n);
     return;
   }
   os << g.gene << '\t' << g.chrom << '\t' << g.tss << '\t' << g.n_tested << '\t' << g.n_sig << '\t'
-     << g.acat_p << '\t';
-  if (std::isfinite(g.q_bh)) os << g.q_bh; else os << "NA";
-  os << '\t';
-  if (std::isfinite(g.p_emp)) os << g.p_emp; else os << "NA";
-  os << '\t';
-  if (std::isfinite(g.p_beta)) os << g.p_beta; else os << "NA";
-  os << '\t' << g.beta_shape1 << '\t' << g.beta_shape2 << '\n';
+     << g.acat_p << '\t' << q_bh << '\t' << p_emp << '\t' << p_beta << '\t' << s1 << '\t' << s2 << '\n';
 }
 
 }  // namespace eqtl

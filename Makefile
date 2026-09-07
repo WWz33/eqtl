@@ -93,7 +93,7 @@ SRC := \
 OBJ := $(SRC:.cpp=.o)
 BIN := eqtl
 
-.PHONY: all clean smoke htslib openblas
+.PHONY: all clean smoke test htslib openblas
 
 all: $(BIN)
 
@@ -126,7 +126,7 @@ $(HTS_LIB) $(HTS_SRC)/htslib_static.mk:
 $(BIN): $(OBJ) $(GFFSUB_OBJ) $(HTS_REQ) $(OPENBLAS_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJ) $(GFFSUB_OBJ) $(LDFLAGS)
 
-DEPFLAGS = -MMD -MP
+DEPFLAGS = -MMD -MP -DEQTL_VERSION=\"$(VERSION)\"
 DEP := $(OBJ:.o=.d) $(GFFSUB_OBJ:.o=.d)
 -include $(DEP)
 
@@ -139,5 +139,11 @@ $(GFFSUB_SRC)/src/%.o: $(GFFSUB_SRC)/src/%.cpp
 clean:
 	rm -f $(OBJ) $(GFFSUB_OBJ) $(DEP) $(BIN)
 
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0")
+
 smoke: $(BIN)
 	./scripts/run_smoke.sh
+
+test: $(BIN)
+	./scripts/run_tests.sh
+

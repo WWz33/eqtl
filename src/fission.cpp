@@ -87,6 +87,7 @@ static void write_tsv(const std::string& path, const Eigen::MatrixXd& M,
                       const std::vector<std::string>& col_ids) {
   std::ofstream f(path);
   if (!f) die("cannot write: " + path);
+  f.precision(17);  // full double round-trip — file feeds back into -e
   f << "sample_id";
   for (const auto& c : col_ids) f << '\t' << c;
   f << '\n';

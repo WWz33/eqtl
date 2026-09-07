@@ -22,13 +22,16 @@ namespace eqtl {
 // Output file set for one (model, scope) combination
 // ---------------------------------------------------------------------------
 struct ScopeOut {
+  // Buffers before streams: destruction is reverse-declaration order, so the
+  // ofstreams flush (and die) while these vectors are still alive. pubsetbuf
+  // must be called before open() (libstdc++ setbuf is a no-op once open).
+  std::vector<char> pairs_buf;
+  std::vector<char> top_buf;
+  std::vector<char> region_buf;
   std::ofstream pairs;
   std::ofstream top;
   std::ofstream region;
   std::string tag;
-  std::vector<char> pairs_buf;
-  std::vector<char> top_buf;
-  std::vector<char> region_buf;
 };
 
 // ---------------------------------------------------------------------------

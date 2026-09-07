@@ -89,7 +89,8 @@ AssocHit run_test(Model model, bool fast, const GeneReady& gr, const Eigen::Vect
     }
     case Model::Lmm: {
       if (!have_cache) {
-        if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, gr.basis, fast);
+        const LmmBasis& b = gr.basis_ref ? *gr.basis_ref : gr.basis;
+        if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, b, fast);
         else *lmm_cache = prep_lmm(gr.y, gr.X, gr.K_ref ? *gr.K_ref : gr.K, fast);
       }
       return test_lmm(*lmm_cache, g);

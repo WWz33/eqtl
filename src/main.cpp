@@ -7,10 +7,10 @@
 
 int main(int argc, char** argv) {
   eqtl::Options opt;
-  const int pr = eqtl::parse_options(argc, argv, opt);
-  if (pr == 2) return 0;  // help/version
-  if (pr != 0) return 1;
   try {
+    const int pr = eqtl::parse_options(argc, argv, opt);
+    if (pr == 2) return 0;  // help/version
+    if (pr != 0) return 1;
     if (opt.run_fission) return eqtl::run_fission(opt);
     if (opt.make_grm) return eqtl::run_make_grm(opt);
     return eqtl::run_eqtl(opt);
@@ -19,3 +19,4 @@ int main(int argc, char** argv) {
     return 1;
   }
 }
+

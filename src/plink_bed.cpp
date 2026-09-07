@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include "eqtl/util.hpp"
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <algorithm>
 #include <fstream>
@@ -53,13 +54,15 @@ void PlinkBed::read_bim(Meta& m, const std::string& path) {
   // Line buffer for streaming
   std::vector<char> line_buf(1024);
   while (true) {
-    // Read one line
+    // Read one line; grow the buffer until the newline is captured (very long
+    // bim lines occur with long indel alleles).
     if (std::fgets(line_buf.data(), static_cast<int>(line_buf.size()), fp) == nullptr) break;
-    // Grow line buffer if line was truncated (no newline at end)
-    while (line_buf.back() != '\0' && line_buf.back() != '\n' && !std::feof(fp)) {
-      size_t old_sz = line_buf.size();
-      line_buf.resize(old_sz * 2);
-      if (std::fgets(line_buf.data() + old_sz, static_cast<int>(old_sz + 1), fp) == nullptr) break;
+    size_t len = std::strlen(line_buf.data());
+    while (len == line_buf.size() - 1 && line_buf[len - 1] != '\n' && !std::feof(fp)) {
+      line_buf.resize(line_buf.size() * 2);
+      if (std::fgets(line_buf.data() + len, static_cast<int>(line_buf.size() - len), fp) == nullptr)
+        break;
+      len = std::strlen(line_buf.data());
     }
 
     const char* p = line_buf.data();

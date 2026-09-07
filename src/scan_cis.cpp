@@ -90,11 +90,11 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
       ScopeOut local;
       const std::string t_pairs = opt.out + ".tmp." + std::to_string(tid) + ".pairs";
       const std::string t_top = opt.out + ".tmp." + std::to_string(tid) + ".top";
-      const std::string t_region = opt.out + ".tmp." + std::to_string(tid) + ".region";
       local.tag = "cis";
       local.pairs.open(t_pairs);
       local.top.open(t_top);
-      local.region.open(t_region);
+      if (!local.pairs || !local.top)
+        die("cis thread " + std::to_string(tid) + ": cannot write " + t_pairs);
 
       const size_t nW = works.size();
       const size_t chunk = (nW + static_cast<size_t>(nT) - 1) / static_cast<size_t>(nT);
@@ -113,7 +113,7 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
           std::iota(gr.keep.begin(), gr.keep.end(), 0);
           gr.y = y;
           gr.X = cov.X;
-          gr.basis = grm_basis;
+          gr.basis_ref = &grm_basis;  // shared; avoids a per-gene n×n Q copy
           gr.has_basis = true;
         } else {
           if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
@@ -132,10 +132,8 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
       }
       local.pairs.close();
       local.top.close();
-      local.region.close();
       pairs_part[static_cast<size_t>(tid)] = t_pairs;
       top_part[static_cast<size_t>(tid)] = t_top;
-      (void)t_region;
     } catch (const std::exception& e) {
       std::lock_guard<std::mutex> lk(err_mu);
       if (err_msg.empty()) err_msg = e.what();
@@ -144,8 +142,14 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
       err.store(1);
     }
   }
-  if (err.load())
+  if (err.load()) {
+    // remove per-thread tmp files so a re-run does not concatenate stale partials
+    for (int t = 0; t < T; ++t) {
+      std::remove((opt.out + ".tmp." + std::to_string(t) + ".pairs").c_str());
+      std::remove((opt.out + ".tmp." + std::to_string(t) + ".top").c_str());
+    }
     die(err_msg.empty() ? "cis parallel scan failed" : "cis parallel scan failed: " + err_msg);
+  }
 
   auto cat_file = [](std::ostream& dst, const std::string& path) {
     std::ifstream in(path);

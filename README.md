@@ -59,8 +59,8 @@ eqtl fission [options]
 | `-k, --grm` | — | GRM prefix (`.grm.id`/`.grm.bin`) |
 | `--make-grm` | off | write GRM and exit |
 | `-m, --mode` | all | `cis`/`trans`/`gw`/`all` |
-| `--model` | lmm | `lm`,`lmm`,`glm`,`glmm` (comma-separated) |
-| `-w, --window` | 1000000 | cis window ± TSS (bp) |
+| `--model` | lmm | `lm`,`lmm`,`glm`,`glmm` (comma-separated; glm/glmm are cis-only) |
+| `-w, --window` | 1000000 | cis window: gene body ± window (bp); matches QTLtools nominal |
 | `--pval-cis` | 1e-5 | pairs threshold (cis) |
 | `--pval-trans` | 1e-5 | pairs threshold (trans/gw) |
 | `--maf` | 0 | min effect-allele frequency |
@@ -123,6 +123,45 @@ GFF3 `gene` lines. Gene ID from `ID` (fallback `Name`/`gene_id`; override: `--gf
 ### GRM (`-k`)
 
 GCTA format. `{prefix}.grm.id` (one sample/line), `{prefix}.grm.bin` (float32 lower-triangle incl. diagonal). Compatible with `gcta64 --make-grm` output.
+
+## Choosing a model
+
+| Model | Use when | Stat test | Cost |
+|-------|----------|-----------|------|
+| `lm` | standard expression values (TPM / normalized continuous) | per-SNP OLS t by Frisch–Waugh | fast |
+| `lmm` | pure samples with relatedness + confounders (use a GRM + `--pheno-norm int`) | Wald, δ fixed from null REML (⟨QΛQ'⟩) | medium |
+| `glm` | count phenotypes without relatedness correction | NB2 score test at MLE null; alternatives via moment-match | fast (score-test per SNP) |
+| `glmm` | count phenotypes with relatedness | Poisson GLMM w/ GRm random effect, PQL | slow (per-SNP refit) |
+
+`--pheno-norm int` = Rank-based Inverse Normal Transform (GTEx v8 / QTLtools `--normal`), applied per gene before residualization.
+
+## Runtime (this codebase's measured examples)
+
+On the bundled `data/test` panel (200 samples × 1000 genes × ~12k variants, 4 threads):
+
+| command | time |
+|---------|------|
+| LM cis | ~3 s |
+| LM cis + `--perm 50` | ~65 s |
+| LMM cis (with GRM) | ~3 s |
+| LMM cis + `--perm 20` | ~90 s |
+| LMM trans | ~13 s |
+| GLM cis | ~33 s |
+| GLMM cis (20 genes) | ~2 min (PQL per-SNP refit) |
+
+GLM/GLMM trans/gw is explicitly rejected at argument-parse time.
+
+## Testing
+
+```bash
+make smoke         # tiny synthetic panel, lm/lmm/glm/glmm cis + guard checks
+make test          # 19-case matrix: all models/scopes, perm path, INT, error paths
+python3 scripts/gold_lm.py   # pin-investigate OLS to numpy reference
+```
+
+The matrix covers: nominal + INT + permutations per model, GRM path, `--fast` LMM, error-path rejection (science-in bad `--window`, glm+trans, INT+glm), and p-value sanity checks (uniform null under the synthetic panel).
+
+
 
 ## Output
 

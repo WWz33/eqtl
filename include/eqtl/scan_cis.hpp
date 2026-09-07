@@ -94,8 +94,10 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     grb.keep = gr.keep;
     grb.X = gr.X;
     grb.has_basis = gr.has_basis;
-    grb.K_ref = &gr.K;
-    grb.basis_ref = &gr.basis;
+    // Follow the source's shared refs; gr.K / gr.basis are EMPTY on the shared-GRM
+    // fast path, so &gr.K would dangle into a zero-size matrix for GLMM PQL.
+    grb.K_ref = gr.K_ref ? gr.K_ref : &gr.K;
+    grb.basis_ref = gr.basis_ref ? gr.basis_ref : &gr.basis;
     grb.y.resize(y_perm_base.size());
 
     std::atomic<int> perm_err{0};

@@ -16,8 +16,8 @@ struct GeneSummary {
   double acat_p = 1;
   double p_emp = std::numeric_limits<double>::quiet_NaN();
   double p_beta = std::numeric_limits<double>::quiet_NaN();
-  double beta_shape1 = 0;
-  double beta_shape2 = 0;
+  double beta_shape1 = std::numeric_limits<double>::quiet_NaN();
+  double beta_shape2 = std::numeric_limits<double>::quiet_NaN();
   double q_bh = std::numeric_limits<double>::quiet_NaN();
   int n_tested = 0;
   int n_sig = 0;

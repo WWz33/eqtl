@@ -1,5 +1,6 @@
 #include "eqtl/models.hpp"
 #include "eqtl/util.hpp"
+#include <atomic>
 #include <cmath>
 
 namespace eqtl {
@@ -37,6 +38,7 @@ static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Ei
   const int outer_max = estimate_phi ? 10 : 1;
   for (int outer = 0; outer < outer_max; ++outer) {
     // IRLS with phi fixed.
+    bool irls_ok = false;
     for (int it = 0; it < 50; ++it) {
       Eigen::VectorXd z(n), w(n);
       for (int i = 0; i < n; ++i) {
@@ -56,9 +58,10 @@ static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Ei
       const double diff = (beta_new - beta).cwiseAbs().maxCoeff();
       beta = beta_new;
       mu = mu_new;
-      if (diff < 1e-6) break;
+      if (diff < 1e-6) { irls_ok = true; break; }
     }
-    if (!estimate_phi) { converged = true; return; }
+    if (!estimate_phi) { converged = irls_ok; return; }
+    if (!irls_ok) return;  // phi update on a non-stationary beta is meaningless
     // Re-estimate phi by MoM at the current beta/mu and check joint stationarity.
     const double phi_new = nb_mom_phi(y, mu, df);
     if (std::fabs(phi_new - phi) < 1e-6 * std::max(1.0, phi)) {
@@ -68,7 +71,7 @@ static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Ei
     }
     phi = phi_new;
   }
-  converged = true;
+  // phi alternation exhausted outer_max without joint stationarity → not converged
 }
 
 GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, bool fast) {
@@ -79,10 +82,15 @@ GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, bool
   p.n = static_cast<int>(y.size());
   p.fast = fast;
   p.offset = Eigen::VectorXd::Zero(p.n);
-  p.phi = 1.0;
-  Eigen::VectorXd beta, mu;
+  p.phi = 1.0;  Eigen::VectorXd beta, mu;
   nb_irls(y, X, p.offset, p.phi, beta, mu, true, p.converged);
   p.mu = mu;
+  if (!p.converged) {
+    static std::atomic<int> warned{0};
+    if (!warned.exchange(1))
+      warn("glm: NB null fit did not converge for at least one gene; p=NaN for its SNPs");
+    return p;
+  }
   // Null working weights and inverse Fisher info, reused by the per-SNP score
   // test so each SNP is one matrix-vector instead of a full IRLS refit.
   p.w.resize(p.n);
@@ -91,7 +99,11 @@ GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, bool
     p.w(i) = m / (1.0 + p.phi * m);
   }
   const Eigen::MatrixXd XtWX = X.transpose() * p.w.asDiagonal() * X;
-  p.XtWX_inv = XtWX.ldlt().solve(Eigen::MatrixXd::Identity(X.cols(), X.cols()));
+  if (!ldlt_inv_ok(XtWX, p.XtWX_inv)) {
+    // rank-deficient XtWX → score test information is garbage; report
+    // non-convergence so callers emit p=NaN instead of silently wrong p.
+    p.converged = false;
+  }
   return p;
 }
 

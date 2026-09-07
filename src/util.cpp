@@ -13,8 +13,8 @@
 namespace eqtl {
 
 void die(const std::string& msg) {
-  std::cerr << "[E] " << msg << "\n";
-  // throw so OMP parallel regions don't exit() (UB); main catches
+  // throw (do not print): every die() terminates in main's catch, which logs —
+  // printing here too duplicated every [E] line
   throw std::runtime_error(msg);
 }
 void warn(const std::string& msg) {
