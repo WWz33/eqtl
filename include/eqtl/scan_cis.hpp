@@ -72,17 +72,26 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     std::vector<double> perm_min_p(static_cast<size_t>(opt.perm));
 
     Eigen::VectorXd y_perm_base = gr.y;
+    Eigen::VectorXd Xb0_til;  // LMM: null-fitted spectral mean X_til·b0
     if (model == Model::Lm && lm_c.n > 0) {
       y_perm_base = lm_c.y_s;
     } else if (model == Model::Lmm && lmm_c.n > 0) {
-      // whitened spectral residuals: Var(w_i) = σ² under null → exchangeable
+      // whitened spectral residuals: Var(w_i) = σ² under null → exchangeable.
+      // b0 = A00^{-1} X_til^T D y_til does not depend on the permutation and is
+      // already cached at prep as chi0. Both this block and the one inside the
+      // loop below used to re-form and re-factor A00 — here once per gene, and
+      // there again on every permutation draw.
       const Eigen::VectorXd& dinv = lmm_c.dinv;
-      Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
-      Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
-      Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
-      if (ldlt.info() == Eigen::Success) {
-        const Eigen::VectorXd b0 = ldlt.solve(XtDy);
-        const Eigen::VectorXd r_til = lmm_c.y_til - lmm_c.X_til * b0;
+      if (lmm_c.has_a00) {
+        Xb0_til = lmm_c.X_til * lmm_c.chi0;
+      } else {
+        Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
+        Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
+        Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
+        if (ldlt.info() == Eigen::Success) Xb0_til = lmm_c.X_til * ldlt.solve(XtDy);
+      }
+      if (Xb0_til.size() == dinv.size()) {
+        const Eigen::VectorXd r_til = lmm_c.y_til - Xb0_til;
         y_perm_base = r_til.cwiseProduct(dinv.cwiseSqrt());
       }
     } else if (model == Model::Glmm && glmm_c.n > 0) {
@@ -135,17 +144,17 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
             grb.y(i) = std::round(v);
           }
         } else if (model == Model::Lmm && lmm_c.n > 0 && lmm_c.Q.size() > 0) {
-          const Eigen::VectorXd& dinv = lmm_c.dinv;
-          Eigen::MatrixXd XtDX = lmm_c.X_til.transpose() * dinv.asDiagonal() * lmm_c.X_til;
-          Eigen::VectorXd XtDy = lmm_c.X_til.transpose() * (dinv.asDiagonal() * lmm_c.y_til);
-          Eigen::LDLT<Eigen::MatrixXd> ldlt(XtDX);
-          if (ldlt.info() == Eigen::Success) {
-            const Eigen::VectorXd b0 = ldlt.solve(XtDy);
+          // Xb0_til is the null-fitted spectral mean hoisted above. The size
+          // guard covers it; the "no value" state cannot reach here, since it
+          // only arises for a non-ok prep, and that yields no finite p, so the
+          // permutation block (n_tested > 0) is never entered.
+          if (Xb0_til.size() == lmm_c.dinv.size()) {
+            const Eigen::VectorXd& dinv = lmm_c.dinv;
             // grb.y holds shuffled whitened residuals w_perm; un-whiten → spectral residual
             Eigen::VectorXd r_til_perm(grb.y.size());
             for (int i = 0; i < grb.y.size(); ++i)
               r_til_perm(i) = grb.y(i) / std::sqrt(std::max(dinv(i), 1e-12));
-            grb.y = lmm_c.Q * (lmm_c.X_til * b0 + r_til_perm);
+            grb.y = lmm_c.Q * (Xb0_til + r_til_perm);
           }
         }
 
