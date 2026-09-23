@@ -56,13 +56,30 @@ static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd
   if (lo < 1e-8) lo = 1e-8;
   if (hi > 1e6) hi = 1e6;
   const double phi = (1.0 + std::sqrt(5.0)) / 2.0;
+  // Golden section with the carried-over interior point reused: after the
+  // initial bracket each step evaluates only the point it does not already
+  // have, which halves the REML count for the same 40 shrink steps (80 -> 42
+  // evaluations). Reusing a value instead of recomputing it does not reproduce
+  // the old rounding exactly — the converged delta can differ in the last
+  // bits — so output comparisons for this path need a tolerance, not `==`.
+  double m1 = hi - (hi - lo) / phi;
+  double m2 = lo + (hi - lo) / phi;
+  double f1 = reml_negll(m1, y_til, X_til, lambda, df);
+  double f2 = reml_negll(m2, y_til, X_til, lambda, df);
   for (int it = 0; it < 40; ++it) {
-    const double m1 = hi - (hi - lo) / phi;
-    const double m2 = lo + (hi - lo) / phi;
-    const double f1 = reml_negll(m1, y_til, X_til, lambda, df);
-    const double f2 = reml_negll(m2, y_til, X_til, lambda, df);
-    if (f1 < f2) hi = m2;
-    else lo = m1;
+    if (f1 < f2) {
+      hi = m2;
+      m2 = m1;
+      f2 = f1;
+      m1 = hi - (hi - lo) / phi;
+      f1 = reml_negll(m1, y_til, X_til, lambda, df);
+    } else {
+      lo = m1;
+      m1 = m2;
+      f1 = f2;
+      m2 = lo + (hi - lo) / phi;
+      f2 = reml_negll(m2, y_til, X_til, lambda, df);
+    }
   }
   double d = 0.5 * (lo + hi);
   double cur = reml_negll(d, y_til, X_til, lambda, df);
