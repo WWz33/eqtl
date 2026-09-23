@@ -20,18 +20,19 @@ static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_
   const int df = prep.n - prep.p - 1;
 
   if (prep.has_a00) {
-    // Same bordered-Schur hot path as test_lmm but skips the Q^T g
-    // projection (it is done once per SNP, SNP-outer, upstream of this call).
+    // Same bordered-Schur hot path as test_lmm (model_lmm.cpp) but skips the
+    // Q^T g projection (it is done once per SNP, SNP-outer, upstream of this
+    // call). Keep the two implementations in sync.
     ws.Dg.noalias() = prep.dinv.cwiseProduct(g_til);
     const double gg = ws.Dg.dot(g_til);
     if (gg < 1e-12) { h.p = 1.0; return h; }
-    Eigen::VectorXd a = prep.X_til.transpose() * ws.Dg;      // X_til^T D g_til (p)
+    ws.a.noalias() = prep.X_til.transpose() * ws.Dg;         // X_til^T D g_til (p)
     const double yg = ws.Dg.dot(prep.y_til);                 // y_til^T D g_til
-    ws.u = prep.ldlt_a00.solve(a);                           // A00^{-1} a (p²)
-    const double aTu = a.dot(ws.u);
+    ws.u = prep.ldlt_a00.solve(ws.a);                        // A00^{-1} a (p²)
+    const double aTu = ws.a.dot(ws.u);
     const double S = gg - aTu;
     if (S <= 1e-15) { h.p = 1.0; return h; }
-    const double bg = (yg - a.dot(prep.chi0)) / S;
+    const double bg = (yg - ws.a.dot(prep.chi0)) / S;
     double q = prep.rss_null - S * bg * bg;
     if (q < 0) q = 0;
     const double sigma2 = (df > 0) ? (q / df) : 1.0;
@@ -139,6 +140,10 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
   }
 
   LmmTestWs ws;
+  // One workspace per thread. The parallel region below sits inside the
+  // per-SNP callback, so a workspace declared inside it would be rebuilt —
+  // and its vectors re-allocated — for every SNP.
+  std::vector<LmmTestWs> ws_pool(static_cast<size_t>(std::max(1, opt.threads)));
   Eigen::VectorXd g_buf, g_til;
 
   if (same_keep) {
@@ -173,7 +178,7 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       std::fill(write_flag.begin(), write_flag.end(), 0);
 #pragma omp parallel if (opt.threads > 1 && jobs.size() > 32 && !omp_in_parallel()) num_threads(opt.threads)
       {
-        LmmTestWs ws_t;
+        LmmTestWs& ws_t = ws_pool[static_cast<size_t>(omp_get_thread_num())];
 #pragma omp for schedule(static)
         for (int ji = 0; ji < Gz; ++ji) {
           auto& job = jobs[static_cast<size_t>(ji)];

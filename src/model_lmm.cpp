@@ -166,6 +166,21 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const E
   return prep_lmm(y, X, make_lmm_basis(K), fast);
 }
 
+namespace {
+// Per-thread scratch for the bordered-Schur test. test_lmm is called from
+// OpenMP workers (cis gene loop, both permutation loops) as well as from
+// serial code, so the granularity has to be per thread. The vectors are
+// written and consumed within one call — do not re-enter test_lmm between the
+// first write and the last read.
+struct LmmTestScratch {
+  Eigen::VectorXd g_til, Dg, a, u;
+};
+LmmTestScratch& lmm_test_scratch() {
+  static thread_local LmmTestScratch s;
+  return s;
+}
+}  // namespace
+
 AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
   AssocHit h;
   h.n = prep.n;
@@ -189,17 +204,18 @@ AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g) {
     // p-dimensional triangular solve reusing ldlt_a00 (p²), and a few scalar
     // dot products. The slow path's (p+1)×(p+1) product and repeat LDLT are
     // removed; any SNP-related near-singularity is caught via the Schur S.
-    const Eigen::VectorXd g_til = prep.Q.transpose() * g;
-    const Eigen::VectorXd Dg = prep.dinv.cwiseProduct(g_til);
-    const double gg = Dg.dot(g_til);
+    LmmTestScratch& s = lmm_test_scratch();
+    s.g_til.noalias() = prep.Q.transpose() * g;
+    s.Dg.noalias() = prep.dinv.cwiseProduct(s.g_til);
+    const double gg = s.Dg.dot(s.g_til);
     if (gg < 1e-12) { h.p = 1.0; return h; }
-    const Eigen::VectorXd a = prep.X_til.transpose() * Dg;   // X_til^T D g_til
-    const double yg = Dg.dot(prep.y_til);                    // y_til^T D g_til
-    const Eigen::VectorXd u = prep.ldlt_a00.solve(a);        // A00^{-1} a
-    const double aTu = a.dot(u);
-    const double S = gg - aTu;                               // Schur complement
+    s.a.noalias() = prep.X_til.transpose() * s.Dg;      // X_til^T D g_til
+    const double yg = s.Dg.dot(prep.y_til);             // y_til^T D g_til
+    s.u = prep.ldlt_a00.solve(s.a);                     // A00^{-1} a
+    const double aTu = s.a.dot(s.u);
+    const double S = gg - aTu;                          // Schur complement
     if (S <= 1e-15) { h.p = 1.0; return h; }
-    const double bg = (yg - a.dot(prep.chi0)) / S;          // Wald slope
+    const double bg = (yg - s.a.dot(prep.chi0)) / S;    // Wald slope
     // RSS_full = rss_null - S · bg² (bordered elimination of the SNP row);
     // rss_null = y_dy − XtDy0·chi0 is precomputed, β_NS = chi0 − bg·u.
     double q = prep.rss_null - S * bg * bg;

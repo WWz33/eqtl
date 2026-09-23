@@ -43,6 +43,7 @@ struct LmmTestWs {
   Eigen::VectorXd XtDy, beta, e, cov_col;
   Eigen::VectorXd Dg;        // bordered-Schur scratch: dinv .* g_til
   Eigen::VectorXd u;         // bordered-Schur scratch: A00^{-1} a
+  Eigen::VectorXd a;         // bordered-Schur scratch: X_til^T D g_til
 };
 
 // ---------------------------------------------------------------------------
