@@ -30,7 +30,18 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   summary.n_sig = 0;
   Eigen::VectorXd g_buf;
   std::vector<Eigen::VectorXd> cached_dosage;
+  // LMM keeps the genotype in the spectral domain instead. The permutation
+  // scheme shuffles the phenotype's whitened residuals, never the genotype, so
+  // g_til = Q^T g is the same on every draw — caching it removes one n²
+  // projection per SNP per draw. maf_sub has to be stored alongside: it comes
+  // from the sample-space dosage and cannot be recovered from g_til.
+  std::vector<Eigen::VectorXd> cached_gtil;
+  std::vector<double> cached_maf;
   const bool do_perm = opt.perm > 0;
+  // Q is released on some trans paths before permutation; make sure the cis
+  // projection below still has its full matrix.
+  const bool cache_gtil =
+      do_perm && model == Model::Lmm && lmm_c.n > 0 && lmm_c.Q.cols() == lmm_c.n;
 
   auto apply_hit = [&](AssocHit& h, const SnpRec& snp) {
     if (!std::isfinite(h.p)) return;
@@ -51,9 +62,15 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     AssocHit h = test_one(model, opt.fast, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true, g_buf);
     apply_hit(h, snp);
     if (do_perm && std::isfinite(h.p)) {
-      if (cached_dosage.size() * static_cast<size_t>(std::max<int>(g_buf.size(), 1)) > 25'000'000)
+      const size_t n_cached = cache_gtil ? cached_gtil.size() : cached_dosage.size();
+      if (n_cached * static_cast<size_t>(std::max<int>(g_buf.size(), 1)) > 25'000'000)
         die("cis perm: too many SNPs in cis window for gene " + gene + " — reduce --window");
-      cached_dosage.push_back(g_buf);
+      if (cache_gtil) {
+        cached_gtil.push_back(lmm_c.Q.transpose() * g_buf);
+        cached_maf.push_back(h.maf);
+      } else {
+        cached_dosage.push_back(g_buf);
+      }
     }
   });
 
@@ -110,7 +127,8 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     grb.y.resize(y_perm_base.size());
 
     std::atomic<int> perm_err{0};
-#pragma omp parallel for schedule(dynamic) if (opt.threads > 1 && !omp_in_parallel()) firstprivate(grb)
+    LmmTestWs ws_b;  // per-thread copy (firstprivate); see the trans SNP-outer loop
+#pragma omp parallel for schedule(dynamic) if (opt.threads > 1 && !omp_in_parallel()) firstprivate(grb, ws_b)
     for (int b = 0; b < opt.perm; ++b) {
       if (perm_err.load()) continue;
       try {
@@ -165,9 +183,16 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
         prep_null(model, opt.fast, grb, &lm_b, &lmm_b, &glm_b, &glmm_b);
 
         double minp = 1.0;
-        for (const auto& gd : cached_dosage) {
-          const double p = test_one_p(model, opt.fast, grb, gd, &lm_b, &lmm_b, &glm_b, &glmm_b);
-          if (std::isfinite(p) && p < minp) minp = p;
+        if (cache_gtil) {
+          for (size_t i = 0; i < cached_gtil.size(); ++i) {
+            const AssocHit h = test_lmm_gtil(lmm_b, cached_gtil[i], cached_maf[i], ws_b);
+            if (std::isfinite(h.p) && h.p < minp) minp = h.p;
+          }
+        } else {
+          for (const auto& gd : cached_dosage) {
+            const double p = test_one_p(model, opt.fast, grb, gd, &lm_b, &lmm_b, &glm_b, &glmm_b);
+            if (std::isfinite(p) && p < minp) minp = p;
+          }
         }
 
         T_perm[static_cast<size_t>(b)] = -std::log10(std::max(minp, 1e-300));

@@ -37,15 +37,6 @@ struct GeneLmmJob {
   std::vector<std::pair<double, Eigen::VectorXd>> top;
 };
 
-struct LmmTestWs {
-  Eigen::MatrixXd Xg;
-  Eigen::MatrixXd XtDX;
-  Eigen::VectorXd XtDy, beta, e, cov_col;
-  Eigen::VectorXd Dg;        // bordered-Schur scratch: dinv .* g_til
-  Eigen::VectorXd u;         // bordered-Schur scratch: A00^{-1} a
-  Eigen::VectorXd a;         // bordered-Schur scratch: X_til^T D g_til
-};
-
 // ---------------------------------------------------------------------------
 // Inline helpers shared by LM/LMM SNP-outer paths
 // ---------------------------------------------------------------------------

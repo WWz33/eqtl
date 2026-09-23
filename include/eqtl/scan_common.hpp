@@ -115,6 +115,25 @@ double test_one_p(Model model, bool fast, const GeneReady& gr, const Eigen::Vect
                   GenePrepLm* lm_c, GenePrepLmm* lmm_c, GenePrepGlm* glm_c, GenePrepGlmm* glmm_c);
 
 // ---------------------------------------------------------------------------
+// Spectral-input LMM Wald test (trans SNP-outer, cis permutation loop)
+// ---------------------------------------------------------------------------
+struct LmmTestWs {
+  Eigen::MatrixXd Xg;
+  Eigen::MatrixXd XtDX;
+  Eigen::VectorXd XtDy, beta, e, cov_col;
+  Eigen::VectorXd Dg;        // bordered-Schur scratch: dinv .* g_til
+  Eigen::VectorXd u;         // bordered-Schur scratch: A00^{-1} a
+  Eigen::VectorXd a;         // bordered-Schur scratch: X_til^T D g_til
+};
+
+// test_lmm with the Q^T g projection already done by the caller. maf_sub is
+// the sample-space subset MAF and only feeds the returned record — it must
+// never be derived from g_til. Defined in scan_trans_lmm.cpp next to the
+// SNP-outer loop that uses it; keep it in sync with test_lmm.
+AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, double maf_sub,
+                       LmmTestWs& ws);
+
+// ---------------------------------------------------------------------------
 // Multiple testing
 // ---------------------------------------------------------------------------
 void bh_adjust(std::vector<GeneSummary>& gs);

@@ -8,8 +8,10 @@ namespace eqtl {
 // ---------------------------------------------------------------------------
 // LMM-specific helpers
 // ---------------------------------------------------------------------------
-static AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, double maf_sub,
-                              LmmTestWs& ws) {
+// Shared with the cis permutation loop (declared in scan_common.hpp): both
+// feed it a genotype that is already in the spectral domain.
+AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, double maf_sub,
+                       LmmTestWs& ws) {
   AssocHit h;
   h.n = prep.n;
   h.maf = maf_sub;
