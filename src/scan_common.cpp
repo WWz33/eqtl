@@ -53,12 +53,11 @@ BasisCache& basis_cache() {
 }
 
 uint64_t basis_hash(const std::vector<int>& keep, bool fast, const Eigen::MatrixXd& K) {
-  uint64_t h = 14695981039346656037ull;  // FNV-1a 64-bit offset basis
+  uint64_t h = keep_hash(keep);
   auto mix = [&h](uint64_t v) {
     h ^= v;
     h *= 1099511628211ull;
   };
-  for (int k : keep) mix(static_cast<uint64_t>(static_cast<uint32_t>(k)));
   mix(fast ? 1ull : 0ull);
   mix(static_cast<uint64_t>(K.rows()));
   mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(K.data())));

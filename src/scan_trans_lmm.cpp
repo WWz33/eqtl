@@ -2,6 +2,7 @@
 #include "eqtl/plink_bed.hpp"
 #include "eqtl/vcf_session.hpp"
 #include <omp.h>
+#include <unordered_map>
 
 namespace eqtl {
 
@@ -203,13 +204,17 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
   } else {
     // Mixed keeps: each job carries its own basis and sample subset, so the
     // per-SNP projection cannot be shared the way the same-keep branch above
-    // shares it (jobs whose keeps happen to coincide recompute it). The per-job
-    // work runs in parallel; hits are buffered per job index and flushed in
-    // ascending order after the region, which keeps the emitted order — and so
-    // the output bytes — identical to the old serial loop. schedule(static)
-    // assumes a roughly uniform per-job cost (it scales with the keep size); a
-    // panel mixing very different keep sizes would want dynamic scheduling.
-    // See also: the same idiom in the same-keep branch above.
+    // shares it. Jobs that do share a keep set are grouped here: equal keeps
+    // mean equal GRM subsets and therefore equal bases (same decomposition of
+    // the same matrix), so Q^T g is computed once per distinct sample set
+    // instead of once per gene. That argument is what makes the sharing
+    // correct; the coefficient check below is a guard against it ever being
+    // violated — a group whose Q matrices disagree projects per job, as before.
+    //
+    // Work is parallelised over groups; hits are buffered per job index and
+    // flushed in ascending order after the region, which keeps the emitted
+    // order — and so the output bytes — identical to the serial loop. Dynamic
+    // scheduling because both the group size and its keep size vary.
     size_t maxk = 0;
     for (const auto& j : jobs) maxk = std::max(maxk, j.gr.keep.size());
     const int Gz2 = static_cast<int>(jobs.size());
@@ -218,6 +223,55 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       Eigen::VectorXd g_til;
       LmmTestWs ws;
     };
+    struct KeepGroup {
+      std::vector<int> member;
+      int rep = -1;
+      bool share = false;
+    };
+    std::vector<KeepGroup> groups;
+    {
+      std::unordered_map<uint64_t, std::vector<int>> by_hash;
+      for (int ji = 0; ji < Gz2; ++ji) {
+        const std::vector<int>& keep = jobs[static_cast<size_t>(ji)].gr.keep;
+        const uint64_t h = keep_hash(keep);
+        int g = -1;
+        const auto it = by_hash.find(h);
+        if (it != by_hash.end()) {
+          for (int cand : it->second) {
+            if (jobs[static_cast<size_t>(groups[static_cast<size_t>(cand)].rep)].gr.keep == keep) {
+              g = cand;
+              break;
+            }
+          }
+        }
+        if (g < 0) {
+          KeepGroup ng;
+          ng.rep = ji;
+          groups.push_back(std::move(ng));
+          g = static_cast<int>(groups.size()) - 1;
+          by_hash[h].push_back(g);
+        }
+        groups[static_cast<size_t>(g)].member.push_back(ji);
+      }
+      for (auto& g : groups) {
+        g.share = g.member.size() > 1;
+        if (!g.share) continue;
+        const Eigen::MatrixXd& Q0 = jobs[static_cast<size_t>(g.rep)].prep.Q;
+        const int nk0 = static_cast<int>(jobs[static_cast<size_t>(g.rep)].gr.keep.size());
+        if (Q0.rows() != nk0 || Q0.cols() != nk0) {  // empty Q would compare "equal"
+          g.share = false;
+          continue;
+        }
+        for (int ji : g.member) {
+          const Eigen::MatrixXd& Q = jobs[static_cast<size_t>(ji)].prep.Q;
+          if (Q.rows() != Q0.rows() || Q.cols() != Q0.cols() || Q != Q0) {
+            g.share = false;
+            break;
+          }
+        }
+      }
+    }
+    const int Gg = static_cast<int>(groups.size());
     std::vector<MixedWs> pool(static_cast<size_t>(std::max(1, opt.threads)));
     for (auto& p : pool) {
       p.g_buf.resize(maxk);
@@ -233,13 +287,13 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
 #pragma omp parallel if (opt.threads > 1 && Gz2 > 32 && !omp_in_parallel()) num_threads(opt.threads)
       {
         MixedWs& p = pool[static_cast<size_t>(omp_get_thread_num())];
-#pragma omp for schedule(static)
-        for (int ji = 0; ji < Gz2; ++ji) {
-          auto& job = jobs[static_cast<size_t>(ji)];
-          if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
-          const int nk = static_cast<int>(job.gr.keep.size());
+#pragma omp for schedule(dynamic)
+        for (int gi = 0; gi < Gg; ++gi) {
+          const auto& grp = groups[static_cast<size_t>(gi)];
+          const std::vector<int>& keep = jobs[static_cast<size_t>(grp.rep)].gr.keep;
+          const int nk = static_cast<int>(keep.size());
           for (int r = 0; r < nk; ++r) {
-            const int i = job.gr.keep[static_cast<size_t>(r)];
+            const int i = keep[static_cast<size_t>(r)];
             p.g_buf[static_cast<size_t>(r)] =
                 (i >= 0 && static_cast<size_t>(i) < snp.dosage.size())
                     ? snp.dosage[static_cast<size_t>(i)]
@@ -249,18 +303,27 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
           if (!std::isfinite(subset_maf_or_nan(
                   Eigen::Map<const Eigen::VectorXd>(p.g_buf.data(), nk), &maf_sub)))
             continue;
-          if (p.g_til.size() != nk) p.g_til.resize(nk);
-          {
+          if (grp.share) {
+            if (p.g_til.size() != nk) p.g_til.resize(nk);
             Eigen::Map<const Eigen::VectorXd> g(p.g_buf.data(), nk);
-            p.g_til.noalias() = job.prep.Q.transpose() * g;
+            p.g_til.noalias() = jobs[static_cast<size_t>(grp.rep)].prep.Q.transpose() * g;
           }
-          AssocHit h = test_lmm_gtil(job.prep, p.g_til, maf_sub, p.ws);
-          if (opt.perm > 0 && std::isfinite(h.p) && h.p < opt.perm_trans_thr)
-            topk_consider(job.top, opt.perm_trans_top, h.p,
-                          Eigen::Map<const Eigen::VectorXd>(p.g_buf.data(), nk));
-          if (apply_snp_hit_stats(job, h, snp, pthr)) {
-            write_hits[static_cast<size_t>(ji)] = std::move(h);
-            write_flag[static_cast<size_t>(ji)] = 1;
+          for (int ji : grp.member) {
+            auto& job = jobs[static_cast<size_t>(ji)];
+            if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
+            if (!grp.share) {
+              if (p.g_til.size() != nk) p.g_til.resize(nk);
+              Eigen::Map<const Eigen::VectorXd> g(p.g_buf.data(), nk);
+              p.g_til.noalias() = job.prep.Q.transpose() * g;
+            }
+            AssocHit h = test_lmm_gtil(job.prep, p.g_til, maf_sub, p.ws);
+            if (opt.perm > 0 && std::isfinite(h.p) && h.p < opt.perm_trans_thr)
+              topk_consider(job.top, opt.perm_trans_top, h.p,
+                            Eigen::Map<const Eigen::VectorXd>(p.g_buf.data(), nk));
+            if (apply_snp_hit_stats(job, h, snp, pthr)) {
+              write_hits[static_cast<size_t>(ji)] = std::move(h);
+              write_flag[static_cast<size_t>(ji)] = 1;
+            }
           }
         }
       }

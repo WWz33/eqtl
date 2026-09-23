@@ -12,6 +12,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <cstdint>
 #include <limits>
 #include <cmath>
 #include <utility>
@@ -91,6 +92,19 @@ inline bool all_finite(const Eigen::VectorXd& y, const Eigen::MatrixXd& X) {
 }
 
 Eigen::VectorXd subset_dosage(const std::vector<double>& full, const std::vector<int>& keep);
+
+// FNV-1a over an ordered keep vector — the identity of a sample subset. Shared
+// by the basis cache and by the trans grouping that assumes equal keeps have
+// equal bases. A hash is only a prefilter; callers must still compare the
+// vectors.
+inline uint64_t keep_hash(const std::vector<int>& keep) {
+  uint64_t h = 14695981039346656037ull;  // FNV-1a 64-bit offset basis
+  for (int k : keep) {
+    h ^= static_cast<uint64_t>(static_cast<uint32_t>(k));
+    h *= 1099511628211ull;
+  }
+  return h;
+}
 
 // ---------------------------------------------------------------------------
 // Per-SNP test dispatch (model-generic)
