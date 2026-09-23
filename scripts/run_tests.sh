@@ -123,6 +123,89 @@ run "lmm.trans" \
     --perm 20 --seed 11 --perm-trans-thr 1e-3 --perm-trans-top 100 \
     --out "$OUT_DIR/lmm.trans"
 
+# ---------- 2b. LMM with per-gene missingness --------------------------------
+# The panels above are complete, so every gene shares one keep set and the LMM
+# paths take their shared-sample branches only. Derive a per-gene missing panel
+# to reach the other half: per-gene GRM subsetting, the per-keep basis cache,
+# and the mixed-keep SNP-outer loop, permutation stage-2 included. Both cases
+# run threaded — the shared-basis cis driver and the mixed-keep parallel region
+# are exactly what these cases exist to cover.
+# The gene count is capped so the two cases stay inside the <60s budget (keep
+# this in mind before raising N_GENES: trans scales with it), and the missing
+# pattern is fixed so runs are comparable.
+
+python3 - "$TEST/test.pheno.tsv" "$OUT_DIR/miss.pheno.tsv" <<'PY'
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+N_GENES = 120  # the first N genes are enough to mix keeps
+rows = [l.rstrip('\n').split('\t') for l in open(src)]
+hdr, data = rows[0], rows[1:]
+if len(hdr) - 1 < N_GENES:
+    sys.exit("mixed-keep panel needs %d gene columns, %s has %d" % (N_GENES, src, len(hdr) - 1))
+hdr = hdr[:N_GENES + 1]
+with open(dst, 'w') as out:
+    out.write('\t'.join(hdr) + '\n')
+    for i, row in enumerate(data):
+        vals = [row[0]]
+        for j in range(1, len(hdr)):
+            g = j - 1
+            # every gene drops one sample (j % 7), every fifth gene drops a
+            # second one as well -> several distinct keep sets, none complete
+            miss = (i == g % 7) or (g % 5 == 0 and i == (3 * g + 1) % 11)
+            vals.append('NA' if miss else row[j])
+        out.write('\t'.join(vals) + '\n')
+PY
+
+run "lmm.cis.missing" \
+  "$EQTL" -v "$TEST/test.vcf.gz" -e "$OUT_DIR/miss.pheno.tsv" -g "$TEST/test.gff" \
+    -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model lmm --mode cis -t "$T" \
+    --perm 20 --seed 3 --pval-cis 1 --out "$OUT_DIR/lmm.cis.missing"
+
+run "lmm.trans.missing" \
+  "$EQTL" -v "$TEST/test.vcf.gz" -e "$OUT_DIR/miss.pheno.tsv" -g "$TEST/test.gff" \
+    -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model lmm --mode trans -t "$T" \
+    --perm 20 --seed 3 --perm-trans-thr 1e-3 --perm-trans-top 50 \
+    --out "$OUT_DIR/lmm.trans.missing"
+
+# `run` only checks the exit code, so assert that the per-gene keeps actually
+# reached the test output rather than trusting that the branch was taken: the
+# cis pairs carry the two keep sizes from the panel (198 and 199) in the `n`
+# column, and both region files cover exactly the panel's genes.
+python3 - "$OUT_DIR" "$OUT_DIR/miss.pheno.tsv" <<'PY'
+import sys
+
+out_dir, panel = sys.argv[1], sys.argv[2]
+hdr = open(panel).readline().rstrip('\n').split('\t')
+want = set(hdr[1:])
+if len(want) != 120:
+    sys.exit("FAIL: panel has %d genes, expected 120" % len(want))
+fail = 0
+
+for tag, scope in (("cis", "cis"), ("trans", "trans")):
+    path = "%s/lmm.%s.missing.lmm.%s.region.tsv" % (out_dir, scope, scope)
+    rows = [l.rstrip('\n').split('\t') for l in open(path)]
+    h = rows[0]
+    ig, it = h.index("gene"), h.index("n_tested")
+    genes = {r[ig] for r in rows[1:]}
+    untested = [r[ig] for r in rows[1:] if r[it] == "0"]
+    print("%s: %d region rows, %d genes, %d untested" % (tag, len(rows) - 1, len(genes), len(untested)))
+    if genes != want or untested:
+        print("FAIL: region file does not cover the panel"); fail = 1
+
+path = "%s/lmm.cis.missing.lmm.cis.pairs.tsv" % out_dir
+rows = [l.rstrip('\n').split('\t') for l in open(path)]
+h = rows[0]
+ig, in_ = h.index("gene"), h.index("n")
+genes = {r[ig] for r in rows[1:]}
+ns = sorted({r[in_] for r in rows[1:]})
+print("cis pairs: %d rows, %d genes, keep sizes n=%s" % (len(rows) - 1, len(genes), ns))
+if genes != want or ns != ["198", "199"]:
+    print("FAIL: expected both per-gene keep sizes in the n column"); fail = 1
+
+sys.exit(fail)
+PY
+
 # ---------- 3. Count models: cis only --------------------------------------
 
 run "glm.cis" \
