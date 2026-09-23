@@ -1,9 +1,107 @@
 #include "eqtl/scan_common.hpp"
 #include <algorithm>
+#include <cstdint>
+#include <deque>
+#include <mutex>
 #include <numeric>
 #include <cstring>
 
 namespace eqtl {
+
+namespace {
+
+// GRM subsets repeat whenever genes share their set of complete samples — the
+// common case when missingness is driven by sample QC rather than by gene. The
+// eigendecomposition in build_gene_ready would then be recomputed identically
+// once per gene, which is the dominant per-gene cost on such panels.
+//
+// The cache is process-wide and mutex-guarded (the cis scan builds these on
+// OpenMP workers). The lock covers lookup and insert only: the decomposition
+// runs outside it, and entries live in a deque so a hit stays valid while
+// another thread appends — the copy into the caller's basis is therefore made
+// unlocked.
+//
+// It is bounded by bytes rather than by entry count, because gene-wise
+// (independent) missingness can produce one distinct keep per gene and a basis
+// is n²·8 bytes: at n=1e4 a single basis already exceeds the budget, so nothing
+// is cached and behaviour matches the uncached path exactly.
+//
+// The GRM is identified by its backing-store address, which stands in for its
+// contents: this process builds exactly one GRM, never mutates it (sparsify_grm
+// always runs on a copy) and lives longer than the cache. A second GRM in the
+// same process would need a real generation id in the key.
+constexpr size_t kBasisCacheBudgetBytes = 64ull << 20;
+
+struct BasisCacheEntry {
+  uint64_t hash = 0;
+  std::vector<int> keep;             // full, ordered keep vector (part of the identity)
+  bool fast = false;                 // sparsified basis or not
+  const double* grm_data = nullptr;  // identity of the source GRM's backing store
+  Eigen::Index grm_rows = 0;
+  LmmBasis basis;
+};
+
+struct BasisCache {
+  std::mutex mu;
+  std::deque<BasisCacheEntry> entries;  // stable addresses: nothing is ever erased
+  size_t bytes = 0;
+};
+
+BasisCache& basis_cache() {
+  static BasisCache c;
+  return c;
+}
+
+uint64_t basis_hash(const std::vector<int>& keep, bool fast, const Eigen::MatrixXd& K) {
+  uint64_t h = 14695981039346656037ull;  // FNV-1a 64-bit offset basis
+  auto mix = [&h](uint64_t v) {
+    h ^= v;
+    h *= 1099511628211ull;
+  };
+  for (int k : keep) mix(static_cast<uint64_t>(static_cast<uint32_t>(k)));
+  mix(fast ? 1ull : 0ull);
+  mix(static_cast<uint64_t>(K.rows()));
+  mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(K.data())));
+  return h;
+}
+
+// The returned pointer stays valid for the rest of the process.
+const LmmBasis* lookup_basis(const std::vector<int>& keep, bool fast, const Eigen::MatrixXd& K,
+                             uint64_t hash) {
+  BasisCache& c = basis_cache();
+  std::lock_guard<std::mutex> lk(c.mu);
+  for (const auto& e : c.entries) {
+    if (e.hash == hash && e.fast == fast && e.grm_rows == K.rows() && e.grm_data == K.data() &&
+        e.keep == keep)
+      return &e.basis;
+  }
+  return nullptr;
+}
+
+void remember_basis(const std::vector<int>& keep, bool fast, const Eigen::MatrixXd& K,
+                    uint64_t hash, const LmmBasis& b) {
+  BasisCacheEntry e;  // filled before the lock: the basis copy must not hold it
+  e.hash = hash;
+  e.keep = keep;
+  e.fast = fast;
+  e.grm_data = K.data();
+  e.grm_rows = K.rows();
+  e.basis = b;
+  const size_t bytes = static_cast<size_t>(e.basis.Q.size()) * sizeof(double) +
+                       static_cast<size_t>(e.basis.lambda.size()) * sizeof(double);
+  BasisCache& c = basis_cache();
+  std::lock_guard<std::mutex> lk(c.mu);
+  for (const auto& prev : c.entries) {  // another thread may have won the race already
+    if (prev.hash == hash && prev.fast == fast && prev.grm_rows == K.rows() &&
+        prev.grm_data == K.data() && prev.keep == keep)
+      return;
+  }
+  if (c.bytes + bytes > kBasisCacheBudgetBytes) return;
+  c.bytes += bytes;
+  c.entries.push_back(std::move(e));
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Gene preparation
@@ -51,12 +149,21 @@ bool build_gene_ready(const Eigen::VectorXd& y_full, const Eigen::MatrixXd& X_fu
     }
     if (need_lmm_basis) {
       const Eigen::MatrixXd& K_src = out.K_ref ? *out.K_ref : out.K;
-      if (fast_sparse) {
-        Eigen::MatrixXd K_use = K_src;
-        sparsify_grm(K_use, 1e-4);
-        out.basis = make_lmm_basis(K_use);
+      // Key on the source GRM, not on the per-gene subset buffer — the subset
+      // address is recycled between genes, the GRM is not.
+      const uint64_t key = basis_hash(out.keep, fast_sparse, *K_full);
+      const LmmBasis* hit = lookup_basis(out.keep, fast_sparse, *K_full, key);
+      if (hit) {
+        out.basis = *hit;  // unlocked: cache entries are stable and never erased
       } else {
-        out.basis = make_lmm_basis(K_src);
+        if (fast_sparse) {
+          Eigen::MatrixXd K_use = K_src;
+          sparsify_grm(K_use, 1e-4);
+          out.basis = make_lmm_basis(K_use);
+        } else {
+          out.basis = make_lmm_basis(K_src);
+        }
+        remember_basis(out.keep, fast_sparse, *K_full, key, out.basis);
       }
       out.has_basis = true;
     }
