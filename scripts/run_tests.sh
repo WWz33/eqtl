@@ -2,7 +2,8 @@
 # Publication-grade regression matrix.
 # Runs every (model × scope × option) combination on synthetic data and checks
 # the output files exist, are non-empty, and match the expected schema.
-# Also runs Bayesian sane-null checks (uniform p-value balance under the null).
+# Also runs sane-null checks: uniform p-value balance under the null, for LM
+# nominal p and for the LMM permutation p_emp/p_beta.
 #
 # Additions / regressions:
 #   -L       show pass/fail lines only
@@ -116,6 +117,16 @@ run "lmm.cis.perm" \
   "$EQTL" -v "$TEST/test.vcf.gz" -e "$TEST/test.pheno.tsv" -g "$TEST/test.gff" \
     -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model lmm --mode cis \
     --perm 20 --seed 11 --out "$OUT_DIR/lmm.cis.perm"
+
+# The permutation p is only worth printing if it is uniform under the null,
+# and this panel is null for cis LMM (1000 genes, none anywhere near
+# significance), so the case above can be judged directly: p_emp has to sit
+# on the B+1 atoms of the permutation test and spread evenly across them,
+# p_beta evenly across the deciles. Panel and seed are fixed, so the bounds
+# only have to absorb deliberate code changes, not run-to-run noise.
+run "lmm.cis.perm.uniform" \
+  python3 "$ROOT/scripts/check_perm_uniform.py" \
+    "$OUT_DIR/lmm.cis.perm.lmm.cis.region.tsv" --perm 20
 
 run "lmm.trans" \
   "$EQTL" -v "$TEST/test.vcf.gz" -e "$TEST/test.pheno.tsv" -g "$TEST/test.gff" \
