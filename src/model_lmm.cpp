@@ -1,15 +1,48 @@
 #include "eqtl/models.hpp"
 #include "eqtl/util.hpp"
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <algorithm>
 
 namespace eqtl {
 
 // Spectral LMM: K=QΛQ', Var∝δλ+1; null REML on X then fixed-δ Wald. No per-SNP re-REML.
 
-static double reml_negll(double delta, const Eigen::VectorXd& y_til, const Eigen::MatrixXd& X_til,
-                         const Eigen::VectorXd& lambda, int df) {
+// Opt-in profiler for the delta search, which runs once per (gene, permutation
+// draw). EQTL_PROF=1 counts and times every reml_negll evaluation and prints
+// the totals at exit. Off by default and free when off: the hot path only pays
+// a cached bool. Written to settle how much of a permutation run is the REML
+// search before deciding whether freezing delta is worth a switch.
+namespace {
+std::atomic<uint64_t> g_reml_calls{0};
+std::atomic<double> g_reml_secs{0.0};
+
+void atomic_add(std::atomic<double>& a, double v) {
+  double cur = a.load(std::memory_order_relaxed);
+  while (!a.compare_exchange_weak(cur, cur + v, std::memory_order_relaxed)) {}
+}
+
+bool reml_prof_on() {
+  static const bool on = [] {
+    const char* e = std::getenv("EQTL_PROF");
+    return e && *e && *e != '0';
+  }();
+  return on;
+}
+
+void reml_prof_report() {
+  if (!reml_prof_on()) return;
+  info("profile: reml_negll " + std::to_string(g_reml_calls.load(std::memory_order_relaxed)) +
+       " calls, " + std::to_string(g_reml_secs.load(std::memory_order_relaxed)) + " s");
+}
+
+const bool g_reml_prof_registered = [] { std::atexit(reml_prof_report); return true; }();
+} // namespace
+
+static double reml_negll_impl(double delta, const Eigen::VectorXd& y_til, const Eigen::MatrixXd& X_til,
+                              const Eigen::VectorXd& lambda, int df) {
   const int n = static_cast<int>(y_til.size());
   Eigen::VectorXd dinv(n);
   double logdet_d = 0;
@@ -35,6 +68,18 @@ static double reml_negll(double delta, const Eigen::VectorXd& y_til, const Eigen
     logdet_x += std::log(di);
   }
   return 0.5 * (df * std::log(sigma2) + logdet_d + logdet_x);
+}
+
+static double reml_negll(double delta, const Eigen::VectorXd& y_til, const Eigen::MatrixXd& X_til,
+                         const Eigen::VectorXd& lambda, int df) {
+  if (!reml_prof_on())
+    return reml_negll_impl(delta, y_til, X_til, lambda, df);
+  const auto t0 = std::chrono::steady_clock::now();
+  const double v = reml_negll_impl(delta, y_til, X_til, lambda, df);
+  const double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  g_reml_calls.fetch_add(1, std::memory_order_relaxed);
+  atomic_add(g_reml_secs, dt);
+  return v;
 }
 
 static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd& X_til,
