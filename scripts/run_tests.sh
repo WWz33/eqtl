@@ -69,7 +69,7 @@ run() {
 check_file() {  # check_file label col_suffix
   local f="$1"
   if [[ -s "$f" ]]; then
-    head -1 "$f" | awk 'NR==1{split($0,h,"\t"); printf "%s", h[1]}' || true
+    head -1 "$f" | awk 'NR==1{split($0,h,"\t"); printf "%s\n", h[1]}' || true
   else
     echo "MISSING($f)"
   fi
@@ -224,22 +224,28 @@ run "glm.cis" \
     -c "$TEST/test.covar.tsv" --model glm --mode cis --perm 50 --seed 17 \
     --out "$OUT_DIR/glm.cis"
 
-# GLMM does a full PQL refit per SNP — too slow for a 1000-gene smoke test at
-# --perm 20. Restrict to the first N genes with a top-of-file subset matrix.
-N_GLMM_GENES="${N_GLMM_GENES:-20}"
+# GLMM does a full PQL refit per SNP, and roughly 15s per gene on this panel,
+# with each permutation draw paying the same again. Keep all samples and
+# restrict to the first N gene columns: the counts matrix is samples (rows) ×
+# genes (columns), so subsetting rows would cut the sample size instead and
+# turn this into a different test. Keep the case small and threaded — this is
+# a smoke test of the GLMM cis path (nominal + one draw), not a scan of the
+# whole panel; raising N or --perm costs minutes, not seconds.
+N_GLMM_GENES="${N_GLMM_GENES:-5}"
 python3 - "$TEST/test.counts.tsv" "$OUT_DIR/counts.sub.tsv" "$N_GLMM_GENES" <<'PY'
 import sys
 src, dst, keep = sys.argv[1], sys.argv[2], int(sys.argv[3])
 with open(src) as f, open(dst, "w") as o:
-    for i, line in enumerate(f):
-        o.write(line)
-        if i == keep:
-            break
+    for line in f:
+        t = line.rstrip('\n').split('\t')
+        if len(t) - 1 < keep:
+            sys.exit("counts matrix has %d genes, need %d" % (len(t) - 1, keep))
+        o.write('\t'.join(t[:keep + 1]) + '\n')
 PY
 run "glmm.cis" \
   "$EQTL" -v "$TEST/test.vcf.gz" -e "$OUT_DIR/counts.sub.tsv" -g "$TEST/test.gff" \
-    -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model glmm --mode cis \
-    --perm 5 --seed 17 --out "$OUT_DIR/glmm.cis"
+    -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model glmm --mode cis -t "$T" \
+    --perm 1 --seed 17 --pval-cis 1 --out "$OUT_DIR/glmm.cis"
 
 # ---------- 4. Input-source axis ---------------------------------------------
 # (was: call make_test.sh again — pointless on this host, the SRC data path is
