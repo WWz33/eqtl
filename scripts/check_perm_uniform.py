@@ -7,20 +7,63 @@ uniform on [0, 1]. The committed test panel is null for cis LMM (no gene
 comes anywhere near significance), so run_tests.sh judges both directly on
 the lmm.cis.perm case.
 
-The permutation RNG is seeded, so a given panel, binary and option set always
-produce the same file: these thresholds absorb deliberate code changes, not
-run-to-run noise. A real defect — a broken shuffle, the wrong draw count, a
-stale observed statistic — pushes chi-square into the hundreds. The bounds
-are far above what the current binary scores and far below any gross failure.
+Both statistics are chi-square against the flat expectation (B+1 cells for
+p_emp, 10 deciles for p_beta) and are judged by their upper-tail probability,
+so the verdict does not depend on B. The permutation RNG is seeded, so a
+given panel, binary and option set always produce the same file: the alpha
+only has to absorb deliberate code changes, not run-to-run noise.
 
 Usage: check_perm_uniform.py REGION.tsv --perm B
-           [--pemp-col p_emp] [--pbeta-col p_beta]
-           [--max-chi2-pemp 60] [--max-chi2-pbeta 40]
+           [--pemp-col p_emp] [--pbeta-col p_beta] [--alpha 1e-5]
 An empty column name skips that check. Exit 0 when all requested checks pass.
 """
 
 import argparse
+import math
 import sys
+
+
+def _gammaincc(a, x):
+    """Regularised upper incomplete gamma Q(a, x): series for x < a+1, Lentz
+    continued fraction otherwise (the usual Numerical Recipes split)."""
+    if x <= 0.0:
+        return 1.0
+    if x < a + 1.0:
+        term = 1.0 / a
+        total = term
+        ap = a
+        for _ in range(500):
+            ap += 1.0
+            term *= x / ap
+            total += term
+            if abs(term) < abs(total) * 1e-15:
+                break
+        return 1.0 - total * math.exp(-x + a * math.log(x) - math.lgamma(a))
+    tiny = 1e-300
+    b = x + 1.0 - a
+    c = 1.0 / tiny
+    d = 1.0 / b
+    h = d
+    for i in range(1, 500):
+        an = -i * (i - a)
+        b += 2.0
+        d = an * d + b
+        if abs(d) < tiny:
+            d = tiny
+        c = b + an / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        de = d * c
+        h *= de
+        if abs(de - 1.0) < 1e-15:
+            break
+    return h * math.exp(-x + a * math.log(x) - math.lgamma(a))
+
+
+def chi2_sf(x, df):
+    """P(chi2_df > x). chi2_df is Gamma(df/2, 2), so the tail is Q(df/2, x/2)."""
+    return _gammaincc(0.5 * df, 0.5 * x)
 
 
 def read_col(path, col):
@@ -44,7 +87,16 @@ def chi2(counts, expect):
     return sum((c - expect) ** 2 / expect for c in counts)
 
 
-def check_pemp(path, col, perm, limit, min_genes):
+def verdict(col, c2, df, n, alpha, extra=""):
+    p = chi2_sf(c2, df)
+    print("%s: n=%d %schi2=%.2f df=%d p=%.3g" % (col, n, extra, c2, df, p))
+    if p < alpha:
+        print("FAIL: %s is not uniform (p=%.3g < %.3g)" % (col, p, alpha))
+        return False
+    return True
+
+
+def check_pemp(path, col, perm, alpha, min_genes):
     vals, skipped = read_col(path, col)
     if vals is None:
         print("FAIL: no %s column in %s" % (col, path))
@@ -68,15 +120,11 @@ def check_pemp(path, col, perm, limit, min_genes):
     # the grid has B+1 atoms, and they are not independent: one df goes to the
     # sample-size constraint, so df = B
     c2 = chi2(counts, len(vals) / (perm + 1))
-    print("%s: n=%d perm=%d chi2=%.2f df=%d limit=%.0f skipped=%d"
-          % (col, len(vals), perm, c2, perm, limit, skipped))
-    if c2 > limit:
-        print("FAIL: %s is not uniform (chi2 over %.0f)" % (col, limit))
-        return False
-    return True
+    return verdict(col, c2, perm, len(vals), alpha,
+                   "perm=%d skipped=%d " % (perm, skipped))
 
 
-def check_pbeta(path, col, limit, min_genes):
+def check_pbeta(path, col, alpha, min_genes):
     vals, skipped = read_col(path, col)
     if vals is None:
         print("FAIL: no %s column in %s" % (col, path))
@@ -91,12 +139,8 @@ def check_pbeta(path, col, limit, min_genes):
             return False
         bins[int(min(v, 0.9999999) * 10)] += 1
     c2 = chi2(bins, len(vals) / 10)
-    print("%s: n=%d deciles=%s chi2=%.2f df=9 limit=%.0f skipped=%d"
-          % (col, len(vals), bins, c2, limit, skipped))
-    if c2 > limit:
-        print("FAIL: %s is not uniform (chi2 over %.0f)" % (col, limit))
-        return False
-    return True
+    return verdict(col, c2, 9, len(vals), alpha,
+                   "deciles=%s skipped=%d " % (bins, skipped))
 
 
 def main():
@@ -107,18 +151,18 @@ def main():
                     help="the --perm B the case was run with")
     ap.add_argument("--pemp-col", default="p_emp", help="[p_emp]; '' skips")
     ap.add_argument("--pbeta-col", default="p_beta", help="[p_beta]; '' skips")
-    ap.add_argument("--max-chi2-pemp", type=float, default=60.0)
-    ap.add_argument("--max-chi2-pbeta", type=float, default=40.0)
+    ap.add_argument("--alpha", type=float, default=1e-5,
+                    help="fail when the chi-square tail probability drops below this [1e-5]")
     ap.add_argument("--min-genes", type=int, default=50)
     args = ap.parse_args()
 
     ok = True
     if args.pemp_col:
         ok &= check_pemp(args.region, args.pemp_col, args.perm,
-                         args.max_chi2_pemp, args.min_genes)
+                         args.alpha, args.min_genes)
     if args.pbeta_col:
         ok &= check_pbeta(args.region, args.pbeta_col,
-                          args.max_chi2_pbeta, args.min_genes)
+                          args.alpha, args.min_genes)
     print("pass" if ok else "FAIL")
     return 0 if ok else 1
 

@@ -32,8 +32,10 @@ import hashlib
 import os
 import sys
 
-# Quantised / approximation columns: report their drift, never judge it.
-PERM_COLS = {"p_emp", "p_beta"}
+# Permutation-derived columns (quantised p, the beta fit to the permutation
+# min-p distribution): report their drift, never judge it. The nominal
+# statistics in the same file are still judged as usual.
+PERM_COLS = {"p_emp", "p_beta", "beta_shape1", "beta_shape2"}
 
 
 def collect(spec):
@@ -48,9 +50,14 @@ def collect(spec):
         return out
     if os.path.isfile(spec):
         return {os.path.basename(spec): spec}
+    # prefix mode: key on the suffix after the prefix, so two runs whose
+    # prefixes differ (out vs out2) still line their files up
     base = os.path.dirname(spec) or "."
-    return {os.path.basename(p): p
-            for p in sorted(glob.glob(os.path.join(base, os.path.basename(spec) + "*.tsv")))}
+    pre = os.path.basename(spec)
+    out = {}
+    for p in sorted(glob.glob(os.path.join(base, pre + "*.tsv"))):
+        out[os.path.basename(p)[len(pre):]] = p
+    return out
 
 
 def md5(path):
@@ -192,12 +199,13 @@ def main():
 
     ok = True
     for rel_path in sorted(fa):
-        name = ("%s %s" % (args.label, rel_path)).strip()
+        pa = fa[rel_path]
+        name = ("%s %s" % (args.label, os.path.basename(pa))).strip()
         if rel_path not in fb:
             print("  %s: missing on side B" % name)
             ok = False
             continue
-        pa, pb = fa[rel_path], fb[rel_path]
+        pb = fb[rel_path]
         hdr_a, rows_a = load(pa)
         hdr_b, rows_b = load(pb)
         same_bytes = md5(pa) == md5(pb)
