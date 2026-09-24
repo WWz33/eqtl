@@ -145,6 +145,9 @@ void print_help() {
     << "        --perm-trans-top INT    trans/gw: top-K SNPs for stage-2 perm  [1000]\n"
     << "        --seed INT         permutation / fission seed\n"
     << "        --disable-beta-approx  omit beta-approximated p\n"
+    << "        --perm-freeze-delta  LMM: reuse the observed delta for every perm\n"
+    << "                           draw instead of re-estimating it (slightly\n"
+    << "                           different null; off by default)\n"
     << "\n"
     << "Output options:\n"
     << "    -o, --out PREFIX       output prefix  [eqtl_out]\n"
@@ -201,6 +204,7 @@ int parse_options(int argc, char** argv, Options& opt) {
       {"perm-trans-top", required_argument, 0, 1021},
       {"seed", required_argument, 0, 1009},
       {"disable-beta-approx", no_argument, 0, 1010},
+      {"perm-freeze-delta", no_argument, 0, 1023},
       {"help", no_argument, 0, 'h'},
       {"version", no_argument, 0, 1011},
       {"peer-factors", required_argument, 0, 1014},
@@ -248,6 +252,7 @@ int parse_options(int argc, char** argv, Options& opt) {
         break;
       case 1009: opt.seed = parse_int_strict(optarg, "--seed"); break;
       case 1010: opt.disable_beta_approx = true; break;
+      case 1023: opt.perm_freeze_delta = true; break;
       case 1011: opt.version = true; break;
       case 1012:
         opt.max_miss = parse_double_strict(optarg, "--max-miss");

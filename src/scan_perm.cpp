@@ -45,6 +45,13 @@ void stage2_perm_topk(const Options& opt, Model model, Job& job,
   GenePrepGlmm glmm_c;
   prep_null(model, opt.fast, grb, &lm_c, &lmm_c, &glm_c, &glmm_c);
 
+  // --perm-freeze-delta: the draws keep the delta the observed y picked, so
+  // their REML search is skipped. The draws still need Q (the stage-2 test
+  // runs through test_one_p), so only the delta is reused here.
+  LmmPrepReuse lmm_reuse;
+  lmm_reuse.fixed_delta =
+      (opt.perm_freeze_delta && lmm_c.n > 0) ? &lmm_c.delta : nullptr;
+
   Eigen::VectorXd y_perm_base = grb.y;
   Eigen::VectorXd Xb0_til;   // LMM only: precomputed null-fitted spectral mean
   if (model == Model::Lm && lm_c.n > 0) {
@@ -118,7 +125,7 @@ void stage2_perm_topk(const Options& opt, Model model, Job& job,
       GenePrepLmm lmm_b;
       GenePrepGlm glm_b;
       GenePrepGlmm glmm_b;
-      prep_null(model, opt.fast, grb2, &lm_b, &lmm_b, &glm_b, &glmm_b);
+      prep_null(model, opt.fast, grb2, &lm_b, &lmm_b, &glm_b, &glmm_b, &lmm_reuse);
       double minp = 1.0;
       for (const auto& gd : cached) {
         const double p = test_one_p(model, opt.fast, grb2, gd, &lm_b, &lmm_b, &glm_b, &glmm_b);

@@ -83,12 +83,15 @@ struct GenePrepLmm {
 // permutation loops): X_til = Q^T X ignores y, and a caller that tests in the
 // spectral domain never reads prep.Q, so neither has to be recomputed or
 // stored per draw.
+// fixed_delta skips the REML search and holds the null at that delta, which
+// changes the permutation null slightly: opt-in, see --perm-freeze-delta.
 // Contract: x_til, when set, is Q^T X for the same X and basis this prep will
 // use. keep_q=false leaves the resulting prep.Q empty, so such a prep may only
 // be consumed by tests that work from g_til (test_lmm_gtil).
 struct LmmPrepReuse {
   const Eigen::MatrixXd* x_til = nullptr;  // reuse this instead of Q^T X
   bool keep_q = true;                      // false: leave prep.Q empty
+  const double* fixed_delta = nullptr;     // skip the REML search, use this
 };
 
 // Null REML for delta on X only; SNP tests use fixed delta + Wald.

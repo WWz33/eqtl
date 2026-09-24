@@ -196,7 +196,8 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const L
   p.y_til = Q.transpose() * y;
   if (reuse && reuse->x_til) p.X_til = *reuse->x_til;
   else p.X_til = Q.transpose() * X;
-  p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
+  if (reuse && reuse->fixed_delta) p.delta = *reuse->fixed_delta;
+  else p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
   fill_dinv(p);
   // null weighted RSS (X only) for partial R² and bordered-Schur caches.
   {

@@ -49,6 +49,10 @@ struct Options {
   int perm_trans_top = 1000;   // top-K SNPs by nominal p for stage-2
   int seed = -1; // -1 = unset
   bool disable_beta_approx = false;
+  // LMM: hold delta at the value the observed y picked instead of re-running
+  // the REML search on every permutation draw. Faster, slightly different
+  // null — off by default so existing outputs do not move.
+  bool perm_freeze_delta = false;
 
   bool help = false;
   bool version = false;
