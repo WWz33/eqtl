@@ -144,8 +144,16 @@ struct LmmTestWs {
 // the sample-space subset MAF and only feeds the returned record — it must
 // never be derived from g_til. Defined in scan_trans_lmm.cpp next to the
 // SNP-outer loop that uses it; keep it in sync with test_lmm.
+//
+// want_p=false skips the incomplete-beta evaluation and leaves `p` at 0 on the
+// ordinary path, so `p` reads as: 0.0 (valid, not evaluated), 1.0 (valid but
+// degenerate — the early exits return that regardless of want_p), or NaN
+// (invalid test, `stat` is NaN as well). Never feed such a record to anything
+// that treats `p` as a p-value. Callers that only need the smallest p in a
+// window rank by |stat| — p_from_t is monotone in |t| for a finite |t| and a
+// fixed df — and evaluate it once for the winner.
 AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, double maf_sub,
-                       LmmTestWs& ws);
+                       LmmTestWs& ws, bool want_p = true);
 
 // ---------------------------------------------------------------------------
 // Multiple testing

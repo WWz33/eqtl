@@ -184,10 +184,23 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
 
         double minp = 1.0;
         if (cache_gtil) {
+          // Only the smallest p in the window is needed, and p_from_t is
+          // monotone in |t| for a finite |t| and a fixed df: rank by |t| and
+          // evaluate the incomplete beta once for the winner instead of once
+          // per SNP. That returns the same p the per-SNP comparison would have
+          // selected, at one evaluation per draw rather than one per SNP.
+          // stat is NaN exactly when the test is invalid, so it also filters
+          // the SNPs the old isfinite(p) check used to drop.
+          double best_abs = -1.0;
+          double best_stat = 0.0;
           for (size_t i = 0; i < cached_gtil.size(); ++i) {
-            const AssocHit h = test_lmm_gtil(lmm_b, cached_gtil[i], cached_maf[i], ws_b);
-            if (std::isfinite(h.p) && h.p < minp) minp = h.p;
+            const AssocHit h = test_lmm_gtil(lmm_b, cached_gtil[i], cached_maf[i], ws_b, false);
+            if (std::isfinite(h.stat) && std::fabs(h.stat) > best_abs) {
+              best_abs = std::fabs(h.stat);
+              best_stat = h.stat;
+            }
           }
+          if (best_abs >= 0.0) minp = p_from_t(best_stat, lmm_b.n - lmm_b.p - 1);
         } else {
           for (const auto& gd : cached_dosage) {
             const double p = test_one_p(model, opt.fast, grb, gd, &lm_b, &lmm_b, &glm_b, &glmm_b);

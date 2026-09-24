@@ -12,12 +12,13 @@ namespace eqtl {
 // Shared with the cis permutation loop (declared in scan_common.hpp): both
 // feed it a genotype that is already in the spectral domain.
 AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, double maf_sub,
-                       LmmTestWs& ws) {
+                       LmmTestWs& ws, bool want_p) {
   AssocHit h;
   h.n = prep.n;
   h.maf = maf_sub;
   if (!prep.ok) {
     h.p = std::numeric_limits<double>::quiet_NaN();
+    h.stat = std::numeric_limits<double>::quiet_NaN();
     return h;
   }
   const int df = prep.n - prep.p - 1;
@@ -42,7 +43,7 @@ AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, do
     h.beta = bg;
     h.se = std::sqrt(std::max(sigma2 / S, 0.0));
     h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
-    h.p = p_from_t(h.stat, df);
+    h.p = want_p ? p_from_t(h.stat, df) : 0.0;
     h.r2 = (prep.rss_null > 1e-15) ? std::max(0.0, 1.0 - q / prep.rss_null) : 0.0;
     return h;
   }
@@ -72,7 +73,7 @@ AssocHit test_lmm_gtil(const GenePrepLmm& prep, const Eigen::VectorXd& g_til, do
   ws.cov_col = ldlt.solve(ws.e);
   h.se = std::sqrt(std::max(sigma2 * ws.cov_col(prep.p), 0.0));
   h.stat = (h.se > 0) ? (h.beta / h.se) : 0.0;
-  h.p = p_from_t(h.stat, df);
+  h.p = want_p ? p_from_t(h.stat, df) : 0.0;
   h.r2 = (prep.rss_null > 1e-15) ? std::max(0.0, 1.0 - q / prep.rss_null) : 0.0;
   return h;
 }
