@@ -15,6 +15,8 @@
 - **trans 缺失面板**：mixed-keep 分支恢复并行、按 keep 分组共享 `Qᵀg`、GRM 基谱按 keep 记忆化（逐字节相同）。实测 `--perm 0`：missH 230 s → 22 s，变长面板 230 s → 48 s。
 
 ### 运行接口变更
+- `--perm-freeze-delta`（默认关闭）：LMM 置换链路复用观测 δ、跳过每次抽样的 REML 搜索。cis 置换快 14–30%、trans stage-2 快 23%；`p_emp`/`p_beta` 有轻微漂移（nominal 结果不变），既有输出默认不受影响。
+- `EQTL_PROF=1`：退出时打印 REML 求值次数与耗时（排查用，默认关闭，无行为影响）。
 - `--model glm` / `glmm` 现在自动拒绝 `--mode trans/gw`(count 模型只有 cis 路径，否则会按数百基因 × 500k SNP PQL 重拟合）。
 - `make test` 变绿色。
 
