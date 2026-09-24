@@ -214,7 +214,8 @@ AssocHit run_test(Model model, bool fast, const GeneReady& gr, const Eigen::Vect
 }
 
 void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache,
-               GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache, GenePrepGlmm* glmm_cache) {
+               GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache, GenePrepGlmm* glmm_cache,
+               const LmmPrepReuse* reuse) {
   switch (model) {
     case Model::Lm:
       *lm_cache = prep_lm(gr.y, gr.X);
@@ -222,7 +223,7 @@ void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache
     case Model::Lmm: {
       const LmmBasis& b = gr.basis_ref ? *gr.basis_ref : gr.basis;
       const Eigen::MatrixXd& k = gr.K_ref ? *gr.K_ref : gr.K;
-      if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, b, fast);
+      if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, b, fast, reuse);
       else *lmm_cache = prep_lmm(gr.y, gr.X, k, fast);
       break;
     }

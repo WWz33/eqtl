@@ -79,9 +79,21 @@ struct GenePrepLmm {
   double y_dy = 0.0;          // y_til^T D y_til
 };
 
+// Re-prep hints for a gene whose y changed but whose model did not (the
+// permutation loops): X_til = Q^T X ignores y, and a caller that tests in the
+// spectral domain never reads prep.Q, so neither has to be recomputed or
+// stored per draw.
+// Contract: x_til, when set, is Q^T X for the same X and basis this prep will
+// use. keep_q=false leaves the resulting prep.Q empty, so such a prep may only
+// be consumed by tests that work from g_til (test_lmm_gtil).
+struct LmmPrepReuse {
+  const Eigen::MatrixXd* x_til = nullptr;  // reuse this instead of Q^T X
+  bool keep_q = true;                      // false: leave prep.Q empty
+};
+
 // Null REML for delta on X only; SNP tests use fixed delta + Wald.
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const LmmBasis& basis,
-                     bool fast = false);
+                     bool fast = false, const LmmPrepReuse* reuse = nullptr);
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd& K,
                      bool fast = false);
 AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g);

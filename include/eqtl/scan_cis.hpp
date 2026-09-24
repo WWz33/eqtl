@@ -126,6 +126,14 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     grb.basis_ref = gr.basis_ref ? gr.basis_ref : &gr.basis;
     grb.y.resize(y_perm_base.size());
 
+    // Per-draw invariants of the LMM prep: X_til = Q^T X ignores y, and the
+    // draws are tested through test_lmm_gtil, which never touches prep.Q. The
+    // outer lmm_c is untouched by this: the un-whitening below still reads its
+    // full Q.
+    LmmPrepReuse lmm_reuse;
+    lmm_reuse.x_til = cache_gtil ? &lmm_c.X_til : nullptr;
+    lmm_reuse.keep_q = !cache_gtil;
+
     std::atomic<int> perm_err{0};
     LmmTestWs ws_b;  // per-thread copy (firstprivate); see the trans SNP-outer loop
 #pragma omp parallel for schedule(dynamic) if (opt.threads > 1 && !omp_in_parallel()) firstprivate(grb, ws_b)
@@ -180,7 +188,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
         GenePrepLmm lmm_b;
         GenePrepGlm glm_b;
         GenePrepGlmm glmm_b;
-        prep_null(model, opt.fast, grb, &lm_b, &lmm_b, &glm_b, &glmm_b);
+        prep_null(model, opt.fast, grb, &lm_b, &lmm_b, &glm_b, &glmm_b, &lmm_reuse);
 
         double minp = 1.0;
         if (cache_gtil) {

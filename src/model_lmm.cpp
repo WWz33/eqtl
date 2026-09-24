@@ -140,14 +140,17 @@ static void fill_dinv(GenePrepLmm& p) {
 }
 
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const LmmBasis& basis,
-                     bool /*fast*/) {
+                     bool /*fast*/, const LmmPrepReuse* reuse) {
   GenePrepLmm p;
   p.n = static_cast<int>(y.size());
   p.p = static_cast<int>(X.cols());
-  p.Q = basis.Q;
+  const bool keep_q = !reuse || reuse->keep_q;
+  if (keep_q) p.Q = basis.Q;
+  const Eigen::MatrixXd& Q = keep_q ? p.Q : basis.Q;
   p.lambda = basis.lambda;
-  p.y_til = p.Q.transpose() * y;
-  p.X_til = p.Q.transpose() * X;
+  p.y_til = Q.transpose() * y;
+  if (reuse && reuse->x_til) p.X_til = *reuse->x_til;
+  else p.X_til = Q.transpose() * X;
   p.delta = optimize_delta(p.y_til, p.X_til, p.lambda);
   fill_dinv(p);
   // null weighted RSS (X only) for partial R² and bordered-Schur caches.

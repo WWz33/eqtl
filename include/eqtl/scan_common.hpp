@@ -113,8 +113,11 @@ AssocHit run_test(Model model, bool fast, const GeneReady& gr, const Eigen::Vect
                   GenePrepLm* lm_cache, GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache,
                   GenePrepGlmm* glmm_cache, bool have_cache);
 
+// reuse is forwarded to the LMM prep only (see LmmPrepReuse); other models
+// ignore it.
 void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache,
-               GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache, GenePrepGlmm* glmm_cache);
+               GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache, GenePrepGlmm* glmm_cache,
+               const LmmPrepReuse* reuse = nullptr);
 
 double subset_maf_or_nan(const Eigen::VectorXd& g, double* maf_out);
 
