@@ -77,9 +77,16 @@ def read_col(path, col):
         for line in f:
             t = line.rstrip("\n").split("\t")
             try:
-                vals.append(float(t[i]))
+                v = float(t[i])
             except (ValueError, IndexError):
                 skipped += 1
+                continue
+            if not math.isfinite(v):
+                # a parsed "nan"/"inf" is a gene without a usable p: it does
+                # not take part in the uniformity judgement
+                skipped += 1
+                continue
+            vals.append(v)
     return vals, skipped
 
 

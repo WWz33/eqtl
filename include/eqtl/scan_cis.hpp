@@ -135,9 +135,10 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
     lmm_reuse.keep_q = !cache_gtil;
     // --perm-freeze-delta: every draw keeps the delta the observed y picked,
     // so the REML search (about a third of this loop) is skipped. The null
-    // shifts slightly; see the option's help text.
+    // shifts slightly; see the option's help text. ok is part of the guard
+    // because a failed null prep has no meaningful delta to freeze.
     lmm_reuse.fixed_delta =
-        (opt.perm_freeze_delta && lmm_c.n > 0) ? &lmm_c.delta : nullptr;
+        (opt.perm_freeze_delta && lmm_c.n > 0 && lmm_c.ok) ? &lmm_c.delta : nullptr;
 
     std::atomic<int> perm_err{0};
     LmmTestWs ws_b;  // per-thread copy (firstprivate); see the trans SNP-outer loop

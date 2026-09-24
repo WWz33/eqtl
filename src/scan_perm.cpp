@@ -47,10 +47,11 @@ void stage2_perm_topk(const Options& opt, Model model, Job& job,
 
   // --perm-freeze-delta: the draws keep the delta the observed y picked, so
   // their REML search is skipped. The draws still need Q (the stage-2 test
-  // runs through test_one_p), so only the delta is reused here.
+  // runs through test_one_p), so only the delta is reused here. ok is part of
+  // the guard because a failed null prep has no meaningful delta to freeze.
   LmmPrepReuse lmm_reuse;
   lmm_reuse.fixed_delta =
-      (opt.perm_freeze_delta && lmm_c.n > 0) ? &lmm_c.delta : nullptr;
+      (opt.perm_freeze_delta && lmm_c.n > 0 && lmm_c.ok) ? &lmm_c.delta : nullptr;
 
   Eigen::VectorXd y_perm_base = grb.y;
   Eigen::VectorXd Xb0_til;   // LMM only: precomputed null-fitted spectral mean

@@ -29,6 +29,7 @@ Exit code: 0 when the mode's verdict passes, 1 otherwise.
 import argparse
 import glob
 import hashlib
+import math
 import os
 import sys
 
@@ -76,11 +77,19 @@ def load(path):
 
 
 def as_number(s):
-    """(value, is_int_literal) or (None, False) for text."""
+    """(finite value, is_int_literal) or (None, False) for text.
+
+    NaN and infinities count as text: they must show up as a structural
+    difference, not vanish into float comparisons (abs(nan - x) is nan and
+    max() quietly drops it, which would turn a real change into a pass).
+    """
     try:
-        return float(s), ("." not in s and "e" not in s and "E" not in s)
+        v = float(s)
     except ValueError:
         return None, False
+    if not math.isfinite(v):
+        return None, False
+    return v, ("." not in s and "e" not in s and "E" not in s)
 
 
 def compare_exact(rows_a, rows_b, hdr):
@@ -191,7 +200,11 @@ def main():
     ap.add_argument("--label", default="", help="prefix for the summary line")
     args = ap.parse_args()
 
-    fa, fb = collect(args.a), collect(args.b)
+    if os.path.isfile(args.a) and os.path.isfile(args.b):
+        # two plain files: compare them as a pair whatever they are called
+        fa, fb = {"": args.a}, {"": args.b}
+    else:
+        fa, fb = collect(args.a), collect(args.b)
     if not fa:
         print("no .tsv files matched %s" % args.a)
         return 1
