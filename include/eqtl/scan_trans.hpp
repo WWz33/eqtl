@@ -22,7 +22,6 @@ struct GeneLmJob {
   GeneSummary summary;
   AssocHit best;
   AcatAcc acat_acc;
-  std::vector<std::pair<double, Eigen::VectorXd>> top;
 };
 
 struct GeneLmmJob {
@@ -34,32 +33,11 @@ struct GeneLmmJob {
   GeneSummary summary;
   AssocHit best;
   AcatAcc acat_acc;
-  std::vector<std::pair<double, Eigen::VectorXd>> top;
 };
 
 // ---------------------------------------------------------------------------
 // Inline helpers shared by LM/LMM SNP-outer paths
 // ---------------------------------------------------------------------------
-
-// max-heap by p (largest p at front) — retain smallest K p-values
-inline void topk_consider(std::vector<std::pair<double, Eigen::VectorXd>>& top, int K, double p,
-                          const Eigen::VectorXd& g) {
-  if (K <= 0 || !std::isfinite(p)) return;
-  if (static_cast<int>(top.size()) < K) {
-    top.emplace_back(p, g);
-    if (static_cast<int>(top.size()) == K) {
-      std::make_heap(top.begin(), top.end(),
-                     [](const auto& a, const auto& b) { return a.first < b.first; });
-    }
-    return;
-  }
-  if (p >= top.front().first) return;
-  std::pop_heap(top.begin(), top.end(),
-                [](const auto& a, const auto& b) { return a.first < b.first; });
-  top.back() = {p, g};
-  std::push_heap(top.begin(), top.end(),
-                 [](const auto& a, const auto& b) { return a.first < b.first; });
-}
 
 template <typename Job>
 inline void fill_hit_meta(AssocHit& h, const Job& job, const SnpRec& snp) {
@@ -114,7 +92,8 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
                         const std::string& scope, ScopeOut& out, double pthr,
                         std::vector<GeneLmmJob>& jobs);
 
-// Stage-2 gene perm on top-K SNPs (defined in scan_perm.cpp)
+// Stage-2 gene permutation, DISABLED: writes p_emp/p_beta as NaN (defined in
+// scan_perm.cpp — see there for why the top-K scheme is biased).
 template <typename Job>
 void stage2_perm_topk(const Options& opt, Model model, Job& job,
                       const LmmBasis* ext_basis = nullptr);

@@ -68,8 +68,8 @@ eqtl fission [options]
 | `--max-miss` | 0.8 | SNP 缺失率上限 |
 | `--fast` | 关 | 稀疏 GRM（LMM）；固定离散参数（GLM/GLMM） |
 | `--perm` | 0 | 基因级置换 |
-| `--perm-trans-thr` | 1e-5 | trans/gw：stage-2 入选阈值 |
-| `--perm-trans-top` | 1000 | trans/gw：stage-2 top-K SNP 数 |
+| `--perm-trans-thr` | 1e-5 | 未使用：trans stage-2 置换已停用 |
+| `--perm-trans-top` | 1000 | 未使用：trans stage-2 置换已停用 |
 | `--seed` | — | 随机种子 |
 | `--disable-beta-approx` | 关 | 跳过 beta 近似 p |
 | `-t, --thread` | 1 | 线程数 |
@@ -168,9 +168,9 @@ p ≤ 阈值的 SNP–基因对。
 | n_sig | pairs 中 SNP 数 |
 | acat_p | SNP p 的 ACAT |
 | q_bh | 跨基因 BH |
-| p_emp | 经验基因 p（`--perm 0` 为 NA） |
-| p_beta | beta 近似基因 p |
-| beta_shape1, beta_shape2 | beta 拟合参数 |
+| p_emp | 经验基因 p（cis；trans/gw 恒为 NA） |
+| p_beta | beta 近似基因 p（cis） |
+| beta_shape1, beta_shape2 | beta 拟合参数（cis） |
 
 ## Fission
 
@@ -196,7 +196,7 @@ PEER（Stegle et al. 2012）：带 ARD 先验的变分贝叶斯因子分析，�
 `--perm B`：基因级 min-p 置换。
 
 - **cis**：精确。缓存 cis 窗口全部 SNP 剂量；残差置换 B 次（LM: Freedman–Lane；LMM: GLS 残差）。p_emp = (1 + #{T_perm ≥ T_obs}) / (B+1)。
-- **trans/gw**：两阶段（FastQTL 式）。Stage 1：全量 nominal 扫描，每基因保留 top-K SNP。Stage 2：对 obs min-p < `--perm-trans-thr` 的基因，置换后仅重测 top-K。相对全 SNP 置换偏保守。
+- **trans/gw**：已停用。原两阶段方案按观测 p 保留 top-K SNP 并仅置换这些 SNP；观测统计量相对该 null 系统性偏小，导致 `p_emp` 对 ~97% 基因恒等于 1/(B+1)。trans/gw 的 `p_emp`/`p_beta` 现输出 NA。
 
 ## License
 

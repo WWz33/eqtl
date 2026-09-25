@@ -68,8 +68,8 @@ eqtl fission [options]
 | `--max-miss` | 0.8 | SNP missingness cutoff |
 | `--fast` | off | sparse GRM (LMM); fixed dispersion (GLM/GLMM) |
 | `--perm` | 0 | gene-level permutations |
-| `--perm-trans-thr` | 1e-5 | trans/gw: stage-2 entry (obs min-p) |
-| `--perm-trans-top` | 1000 | trans/gw: top-K SNPs for stage-2 |
+| `--perm-trans-thr` | 1e-5 | unused: trans stage-2 permutation is disabled |
+| `--perm-trans-top` | 1000 | unused: trans stage-2 permutation is disabled |
 | `--seed` | — | RNG seed |
 | `--disable-beta-approx` | off | skip beta-approx p |
 | `-t, --thread` | 1 | threads |
@@ -207,9 +207,9 @@ One row per gene.
 | n_sig | SNPs in pairs |
 | acat_p | ACAT over SNP p-values |
 | q_bh | BH across genes |
-| p_emp | empirical gene p (NA if `--perm 0`) |
-| p_beta | beta-approx gene p |
-| beta_shape1, beta_shape2 | beta fit |
+| p_emp | empirical gene p (cis; always NA in trans/gw) |
+| p_beta | beta-approx gene p (cis) |
+| beta_shape1, beta_shape2 | beta fit (cis) |
 
 ## Fission
 
@@ -235,7 +235,7 @@ Output: `{prefix}.Y1.tsv`, `{prefix}.Y2.tsv` (use as `-e`), `{prefix}.factors.ts
 `--perm B`: gene-level min-p permutation.
 
 - **cis**: exact. All cis-window SNP dosages cached; residuals shuffled B times (Freedman–Lane for LM; GLS residuals for LMM). p_emp = (1 + #{T_perm ≥ T_obs}) / (B+1).
-- **trans/gw**: two-stage (FastQTL-style). Stage 1: full nominal scan, retain top-K SNPs per gene. Stage 2: permute and re-test top-K only for genes with obs min-p < `--perm-trans-thr`. Conservative relative to full-SNP permutation.
+- **trans/gw**: disabled. The former two-stage scheme retained top-K SNPs by observed p and permuted only those; the observed statistic is then biased low relative to that null, which pinned p_emp at 1/(B+1) for ~97% of genes. p_emp/p_beta are NA in trans/gw.
 
 ## License
 

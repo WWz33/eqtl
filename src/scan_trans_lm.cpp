@@ -71,7 +71,6 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
     Eigen::VectorXd g_full(n), g_s(n), gty(Gz), Xt_g_buf(prep0.p);
     std::vector<AssocHit> write_hits(static_cast<size_t>(Gz));
     std::vector<char> write_flag(static_cast<size_t>(Gz), 0);
-    const int topK = (opt.perm > 0) ? opt.perm_trans_top : 0;
 
     size_t snp_cnt = 0;
     geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
@@ -106,7 +105,6 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
         auto& job = jobs[static_cast<size_t>(gi)];
         if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
         AssocHit h = hit_from_gty(job.prep, gtg, gty(gi), maf_sub);
-        if (topK > 0 && std::isfinite(h.p) && h.p < opt.perm_trans_thr) topk_consider(job.top, topK, h.p, g_full);
         if (apply_snp_hit_stats(job, h, snp, pthr)) {
           write_hits[static_cast<size_t>(gi)] = std::move(h);
           write_flag[static_cast<size_t>(gi)] = 1;
@@ -141,9 +139,6 @@ void scan_lm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, double
         if (!std::isfinite(subset_maf_or_nan(g, &maf_sub))) continue;
         AssocHit h = test_lm(job.prep, g);
         h.maf = maf_sub;
-        if (opt.perm > 0 && std::isfinite(h.p) && h.p < opt.perm_trans_thr)
-          topk_consider(job.top, opt.perm_trans_top, h.p,
-                        Eigen::Map<const Eigen::VectorXd>(g_buf.data(), nk));
         apply_snp_hit(job, h, snp, pthr, Model::Lm, out);
       }
       return true;

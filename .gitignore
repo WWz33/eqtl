@@ -47,6 +47,7 @@ third_party/OpenBLAS/exports/libopenblas*
 # agent / IDE
 .agents
 .claude
+__pycache__/
 
 # GRM products
 *.grm.bin

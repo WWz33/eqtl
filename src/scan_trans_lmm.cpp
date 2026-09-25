@@ -163,7 +163,6 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     const int Gz = static_cast<int>(jobs.size());
     std::vector<AssocHit> write_hits(static_cast<size_t>(Gz));
     std::vector<char> write_flag(static_cast<size_t>(Gz), 0);
-    const int topK = (opt.perm > 0) ? opt.perm_trans_top : 0;
 
     size_t snp_cnt = 0;
     geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
@@ -188,7 +187,6 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
           auto& job = jobs[static_cast<size_t>(ji)];
           if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
           AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws_t);
-          if (topK > 0 && std::isfinite(h.p) && h.p < opt.perm_trans_thr) topk_consider(job.top, topK, h.p, g_buf);
           if (apply_snp_hit_stats(job, h, snp, pthr)) {
             write_hits[static_cast<size_t>(ji)] = std::move(h);
             write_flag[static_cast<size_t>(ji)] = 1;
@@ -318,9 +316,6 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
               p.g_til.noalias() = job.prep.Q.transpose() * g;
             }
             AssocHit h = test_lmm_gtil(job.prep, p.g_til, maf_sub, p.ws);
-            if (opt.perm > 0 && std::isfinite(h.p) && h.p < opt.perm_trans_thr)
-              topk_consider(job.top, opt.perm_trans_top, h.p,
-                            Eigen::Map<const Eigen::VectorXd>(p.g_buf.data(), nk));
             if (apply_snp_hit_stats(job, h, snp, pthr)) {
               write_hits[static_cast<size_t>(ji)] = std::move(h);
               write_flag[static_cast<size_t>(ji)] = 1;
@@ -341,16 +336,6 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     if (job.best.p <= pthr && job.best.p <= 1.0)
       write_pair_line(out.top, job.best, Model::Lmm, scope);
     if (opt.perm > 0) {
-      // Mixed keeps: each job's stage-2 needs its own basis (gr.K was freed above
-      // and gr.basis never set, so prep_null would hit an empty K and abort).
-      // prep.Q/lambda hold this job's decomposition and are dead after the scan:
-      // move them into gr.basis so permutations reuse the basis instead of
-      // re-decomposing per permutation.
-      if (!have_shared_basis && !job.gr.has_basis) {
-        job.gr.basis.Q = std::move(job.prep.Q);
-        job.gr.basis.lambda = std::move(job.prep.lambda);
-        job.gr.has_basis = true;
-      }
       stage2_perm_topk(opt, Model::Lmm, job, have_shared_basis ? &shared_basis : nullptr);
     } else {
       job.summary.p_emp = std::numeric_limits<double>::quiet_NaN();
