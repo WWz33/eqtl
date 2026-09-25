@@ -150,6 +150,10 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
   // only shrink it, and a serialized region has exactly thread 0), so the pool
   // is never indexed out of range.
   std::vector<LmmTestWs> ws_pool(static_cast<size_t>(std::max(1, opt.threads)));
+  // SNPs buffered per parallel region in the trans loops below: one fork/join
+  // per SNP costs a barrier per SNP, which dominates once the thread count
+  // outgrows the serial decode.
+  constexpr int kSnpBatch = 32;
 
   if (same_keep) {
     if (opt.perm == 0) {
@@ -159,15 +163,64 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     const Eigen::MatrixXd& Q = jobs[0].prep.Q;
     const auto& keep = jobs[0].gr.keep;
     const int n = static_cast<int>(keep.size());
-    Eigen::VectorXd g_buf(n), g_til(n);
     const int Gz = static_cast<int>(jobs.size());
-    std::vector<AssocHit> write_hits(static_cast<size_t>(Gz));
-    std::vector<char> write_flag(static_cast<size_t>(Gz), 0);
+    // One fork/join per SNP costs a barrier per SNP, which dominates once the
+    // thread count outgrows the serial decode. Buffer a block of SNPs per
+    // region instead: a job's tests across the whole block stay on one thread,
+    // and hits are emitted in (SNP, gene) order afterwards, so the output bytes
+    // are identical to the per-SNP loop.
+    Eigen::VectorXd g_buf(n);
+    std::vector<Eigen::VectorXd> g_tils(static_cast<size_t>(kSnpBatch), Eigen::VectorXd(n));
+    std::vector<SnpRec> snps(static_cast<size_t>(kSnpBatch));
+    std::vector<double> maf_subs(static_cast<size_t>(kSnpBatch));
+    std::vector<std::vector<std::pair<unsigned, AssocHit>>> hit_parts(
+        static_cast<size_t>(std::max(1, opt.threads)));
 
     size_t snp_cnt = 0;
+    int filled = 0;
+    auto flush_batch = [&]() {
+      if (filled == 0) return;
+#pragma omp parallel if (opt.threads > 1 && Gz > 32 && !omp_in_parallel()) num_threads(opt.threads)
+      {
+        const size_t tid = static_cast<size_t>(omp_get_thread_num());
+        LmmTestWs& ws_t = ws_pool[tid];
+        auto& hits = hit_parts[tid];
+#pragma omp for schedule(static)
+        for (int ji = 0; ji < Gz; ++ji) {
+          auto& job = jobs[static_cast<size_t>(ji)];
+          for (int s = 0; s < filled; ++s) {
+            if (scope == "trans" && job.has_loc &&
+                in_cis_window(snps[static_cast<size_t>(s)], job.loc, opt.window))
+              continue;
+            AssocHit h = test_lmm_gtil(job.prep, g_tils[static_cast<size_t>(s)],
+                                       maf_subs[static_cast<size_t>(s)], ws_t);
+            if (apply_snp_hit_stats(job, h, snps[static_cast<size_t>(s)], pthr))
+              hits.emplace_back(static_cast<unsigned>(s) * static_cast<unsigned>(Gz) +
+                                    static_cast<unsigned>(ji),
+                                std::move(h));
+          }
+        }
+      }
+      size_t total = 0;
+      for (auto& part : hit_parts) total += part.size();
+      if (total > 0) {
+        std::vector<std::pair<unsigned, AssocHit>> hits;
+        hits.reserve(total);
+        for (auto& part : hit_parts) {
+          for (auto& kh : part) hits.push_back(std::move(kh));
+          part.clear();
+        }
+        std::sort(hits.begin(), hits.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (auto& kh : hits) write_pair_line(out.pairs, kh.second, Model::Lmm, out.tag);
+      }
+      filled = 0;
+    };
+
     geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
       if (++snp_cnt % 100000 == 0)
         info("trans/gw LMM: SNP " + std::to_string(snp_cnt));
+      if (filled == kSnpBatch) flush_batch();
       for (size_t r = 0; r < keep.size(); ++r) {
         const int i = keep[r];
         g_buf(static_cast<int>(r)) =
@@ -177,28 +230,13 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       }
       double maf_sub = snp.maf;
       if (!std::isfinite(subset_maf_or_nan(g_buf, &maf_sub))) return true;
-      g_til.noalias() = Q.transpose() * g_buf;
-      std::fill(write_flag.begin(), write_flag.end(), 0);
-#pragma omp parallel if (opt.threads > 1 && jobs.size() > 32 && !omp_in_parallel()) num_threads(opt.threads)
-      {
-        LmmTestWs& ws_t = ws_pool[static_cast<size_t>(omp_get_thread_num())];
-#pragma omp for schedule(static)
-        for (int ji = 0; ji < Gz; ++ji) {
-          auto& job = jobs[static_cast<size_t>(ji)];
-          if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
-          AssocHit h = test_lmm_gtil(job.prep, g_til, maf_sub, ws_t);
-          if (apply_snp_hit_stats(job, h, snp, pthr)) {
-            write_hits[static_cast<size_t>(ji)] = std::move(h);
-            write_flag[static_cast<size_t>(ji)] = 1;
-          }
-        }
-      }
-      for (int ji = 0; ji < Gz; ++ji) {
-        if (write_flag[static_cast<size_t>(ji)])
-          write_pair_line(out.pairs, write_hits[static_cast<size_t>(ji)], Model::Lmm, out.tag);
-      }
+      g_tils[static_cast<size_t>(filled)].noalias() = Q.transpose() * g_buf;
+      snps[static_cast<size_t>(filled)] = snp;
+      maf_subs[static_cast<size_t>(filled)] = maf_sub;
+      ++filled;
       return true;
     });
+    flush_batch();
     if (opt.perm == 0) jobs[0].prep.Q.resize(0, 0);
   } else {
     // Mixed keeps: each job carries its own basis and sample subset, so the
@@ -276,59 +314,83 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
       p.g_buf.resize(maxk);
       p.g_til.resize(static_cast<int>(maxk));
     }
-    std::vector<AssocHit> write_hits(static_cast<size_t>(Gz2));
-    std::vector<char> write_flag(static_cast<size_t>(Gz2), 0);
+    std::vector<SnpRec> snps(static_cast<size_t>(kSnpBatch));
+    std::vector<std::vector<std::pair<unsigned, AssocHit>>> hit_parts(
+        static_cast<size_t>(std::max(1, opt.threads)));
     size_t snp_cnt2 = 0;
-    geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
-      if (++snp_cnt2 % 100000 == 0)
-        info("trans/gw LMM: SNP " + std::to_string(snp_cnt2));
-      std::fill(write_flag.begin(), write_flag.end(), 0);
+    int filled = 0;
+    auto flush_batch = [&]() {
+      if (filled == 0) return;
 #pragma omp parallel if (opt.threads > 1 && Gz2 > 32 && !omp_in_parallel()) num_threads(opt.threads)
       {
-        MixedWs& p = pool[static_cast<size_t>(omp_get_thread_num())];
+        const size_t tid = static_cast<size_t>(omp_get_thread_num());
+        MixedWs& p = pool[tid];
+        auto& hits = hit_parts[tid];
 #pragma omp for schedule(dynamic)
         for (int gi = 0; gi < Gg; ++gi) {
           const auto& grp = groups[static_cast<size_t>(gi)];
           const std::vector<int>& keep = jobs[static_cast<size_t>(grp.rep)].gr.keep;
           const int nk = static_cast<int>(keep.size());
-          for (int r = 0; r < nk; ++r) {
-            const int i = keep[static_cast<size_t>(r)];
-            p.g_buf[static_cast<size_t>(r)] =
-                (i >= 0 && static_cast<size_t>(i) < snp.dosage.size())
-                    ? snp.dosage[static_cast<size_t>(i)]
-                    : std::numeric_limits<double>::quiet_NaN();
-          }
-          double maf_sub = snp.maf;
-          if (!std::isfinite(subset_maf_or_nan(
-                  Eigen::Map<const Eigen::VectorXd>(p.g_buf.data(), nk), &maf_sub)))
-            continue;
-          if (grp.share) {
-            if (p.g_til.size() != nk) p.g_til.resize(nk);
-            Eigen::Map<const Eigen::VectorXd> g(p.g_buf.data(), nk);
-            p.g_til.noalias() = jobs[static_cast<size_t>(grp.rep)].prep.Q.transpose() * g;
-          }
-          for (int ji : grp.member) {
-            auto& job = jobs[static_cast<size_t>(ji)];
-            if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
-            if (!grp.share) {
+          for (int s = 0; s < filled; ++s) {
+            const SnpRec& snp = snps[static_cast<size_t>(s)];
+            for (int r = 0; r < nk; ++r) {
+              const int i = keep[static_cast<size_t>(r)];
+              p.g_buf[static_cast<size_t>(r)] =
+                  (i >= 0 && static_cast<size_t>(i) < snp.dosage.size())
+                      ? snp.dosage[static_cast<size_t>(i)]
+                      : std::numeric_limits<double>::quiet_NaN();
+            }
+            double maf_sub = snp.maf;
+            if (!std::isfinite(subset_maf_or_nan(
+                    Eigen::Map<const Eigen::VectorXd>(p.g_buf.data(), nk), &maf_sub)))
+              continue;
+            if (grp.share) {
               if (p.g_til.size() != nk) p.g_til.resize(nk);
               Eigen::Map<const Eigen::VectorXd> g(p.g_buf.data(), nk);
-              p.g_til.noalias() = job.prep.Q.transpose() * g;
+              p.g_til.noalias() = jobs[static_cast<size_t>(grp.rep)].prep.Q.transpose() * g;
             }
-            AssocHit h = test_lmm_gtil(job.prep, p.g_til, maf_sub, p.ws);
-            if (apply_snp_hit_stats(job, h, snp, pthr)) {
-              write_hits[static_cast<size_t>(ji)] = std::move(h);
-              write_flag[static_cast<size_t>(ji)] = 1;
+            for (int ji : grp.member) {
+              auto& job = jobs[static_cast<size_t>(ji)];
+              if (scope == "trans" && job.has_loc && in_cis_window(snp, job.loc, opt.window)) continue;
+              if (!grp.share) {
+                if (p.g_til.size() != nk) p.g_til.resize(nk);
+                Eigen::Map<const Eigen::VectorXd> g(p.g_buf.data(), nk);
+                p.g_til.noalias() = job.prep.Q.transpose() * g;
+              }
+              AssocHit h = test_lmm_gtil(job.prep, p.g_til, maf_sub, p.ws);
+              if (apply_snp_hit_stats(job, h, snp, pthr))
+                hits.emplace_back(static_cast<unsigned>(s) * static_cast<unsigned>(Gz2) +
+                                      static_cast<unsigned>(ji),
+                                  std::move(h));
             }
           }
         }
       }
-      for (int ji = 0; ji < Gz2; ++ji) {
-        if (write_flag[static_cast<size_t>(ji)])
-          write_pair_line(out.pairs, write_hits[static_cast<size_t>(ji)], Model::Lmm, out.tag);
+      size_t total = 0;
+      for (auto& part : hit_parts) total += part.size();
+      if (total > 0) {
+        std::vector<std::pair<unsigned, AssocHit>> hits;
+        hits.reserve(total);
+        for (auto& part : hit_parts) {
+          for (auto& kh : part) hits.push_back(std::move(kh));
+          part.clear();
+        }
+        std::sort(hits.begin(), hits.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (auto& kh : hits) write_pair_line(out.pairs, kh.second, Model::Lmm, out.tag);
       }
+      filled = 0;
+    };
+
+    geno.for_each_snp(mp, maf, [&](const SnpRec& snp) {
+      if (++snp_cnt2 % 100000 == 0)
+        info("trans/gw LMM: SNP " + std::to_string(snp_cnt2));
+      if (filled == kSnpBatch) flush_batch();
+      snps[static_cast<size_t>(filled)] = snp;
+      ++filled;
       return true;
     });
+    flush_batch();
   }
 
   for (auto& job : jobs) {
