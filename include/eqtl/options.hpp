@@ -9,6 +9,10 @@ enum class Mode { Cis, Trans, All, Gw };
 enum class Model { Lm, Glm, Lmm, Glmm };
 enum class MissHand { Filter, Impute };
 enum class PhenNorm { None, Int };  // per-gene phenotype normalization off | INT
+// How the gene-level permutation p is derived: from the draw counts alone
+// (exact; p_beta stays NA) or additionally from a beta fit to the draw
+// min-p distribution (default).
+enum class PermMode { Beta, Exact };
 
 struct Options {
   // Genotypes: exactly one of vcf or bfile (PLINK prefix → .bed/.bim/.fam)
@@ -45,7 +49,7 @@ struct Options {
 
   int perm = 0; // gene-level permutations; 0 = off
   int seed = -1; // -1 = unset
-  bool disable_beta_approx = false;
+  PermMode perm_mode = PermMode::Beta;
   // LMM: hold delta at the value the observed y picked instead of re-running
   // the REML search on every permutation draw. Faster, slightly different
   // null — off by default so existing outputs do not move.

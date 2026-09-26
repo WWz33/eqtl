@@ -232,7 +232,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
 
     const double Tobs = -std::log10(std::max(T_obs, 1e-300));
     summary.p_emp = p_emp_count(Tobs, T_perm);
-    if (!opt.disable_beta_approx) {
+    if (opt.perm_mode == PermMode::Beta) {
       beta_approx_p(perm_min_p, T_obs, summary.p_beta, summary.beta_shape1, summary.beta_shape2);
     } else {
       summary.p_beta = std::numeric_limits<double>::quiet_NaN();

@@ -142,7 +142,8 @@ void print_help() {
     << "Permutation options:\n"
     << "        --perm INT         gene-level permutations  [0=off]\n"
     << "        --seed INT         permutation / fission seed\n"
-    << "        --disable-beta-approx  omit beta-approximated p\n"
+    << "        --perm-mode STR    gene-level permutation p: beta | exact  [beta]\n"
+    << "                           exact = draw counts only, p_beta stays NA\n"
     << "        --perm-freeze-delta  LMM: reuse the observed delta for every perm\n"
     << "                           draw instead of re-estimating it (slightly\n"
     << "                           different null; off by default)\n"
@@ -199,7 +200,7 @@ int parse_options(int argc, char** argv, Options& opt) {
       {"perm", required_argument, 0, 1008},
       {"permutations", required_argument, 0, 1008},
       {"seed", required_argument, 0, 1009},
-      {"disable-beta-approx", no_argument, 0, 1010},
+      {"perm-mode", required_argument, 0, 1010},
       {"perm-freeze-delta", no_argument, 0, 1023},
       {"help", no_argument, 0, 'h'},
       {"version", no_argument, 0, 1011},
@@ -238,7 +239,11 @@ int parse_options(int argc, char** argv, Options& opt) {
       case 1007: opt.fast = true; break;
       case 1008: opt.perm = parse_int_strict(optarg, "--perm"); if (opt.perm < 0) die("--perm must be >= 0"); break;
       case 1009: opt.seed = parse_int_strict(optarg, "--seed"); break;
-      case 1010: opt.disable_beta_approx = true; break;
+      case 1010:
+        if (std::string(optarg) == "beta") opt.perm_mode = PermMode::Beta;
+        else if (std::string(optarg) == "exact") opt.perm_mode = PermMode::Exact;
+        else die("invalid --perm-mode (beta|exact)");
+        break;
       case 1023: opt.perm_freeze_delta = true; break;
       case 1011: opt.version = true; break;
       case 1012:

@@ -69,7 +69,7 @@ eqtl fission [options]
 | `--fast` | 关 | 稀疏 GRM（LMM）；固定离散参数（GLM/GLMM） |
 | `--perm` | 0 | 基因级置换 |
 | `--seed` | — | 随机种子 |
-| `--disable-beta-approx` | 关 | 跳过 beta 近似 p |
+| `--perm-mode` | beta | 基因级置换 p：`beta` 或 `exact`（`exact` 时 p_beta 为 NA） |
 | `-t, --thread` | 1 | 线程数 |
 | `-o, --out` | eqtl_out | 输出前缀 |
 

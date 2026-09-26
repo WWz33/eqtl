@@ -69,7 +69,7 @@ eqtl fission [options]
 | `--fast` | off | sparse GRM (LMM); fixed dispersion (GLM/GLMM) |
 | `--perm` | 0 | gene-level permutations |
 | `--seed` | — | RNG seed |
-| `--disable-beta-approx` | off | skip beta-approx p |
+| `--perm-mode` | beta | gene-level perm p: `beta` or `exact` (`exact`: p_beta stays NA) |
 | `-t, --thread` | 1 | threads |
 | `-o, --out` | eqtl_out | output prefix |
 
