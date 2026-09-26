@@ -16,6 +16,7 @@
 
 ### 运行接口变更
 - **trans 置换 p 停用**：`--perm` 在 trans/gw 下不再触发 stage-2，`p_emp`/`p_beta`/β 形参输出 NA（运行时 warn 一次）。原因：其 top-K 置换 null 按观测 p 选取，观测端带选择偏倚，`p_emp` 对 ~97% 基因恒等于 1/(B+1)（简并而非保守）。cis 置换不受影响。分析见 `eqtl-gene-level-p-plan.md`。
+- **删除 `--perm-trans-thr` / `--perm-trans-top`**：stage-2 停用后已无任何代码读取，属于死参数；传入会报未知选项。README 表格同步移除。
 - `--perm-freeze-delta`（默认关闭）：LMM 置换链路复用观测 δ、跳过每次抽样的 REML 搜索。cis 置换快 14–30%、trans stage-2 快 23%；`p_emp`/`p_beta` 有轻微漂移（nominal 结果不变），既有输出默认不受影响。
 - `EQTL_PROF=1`：退出时打印 REML 求值次数与耗时（排查用，默认关闭，无行为影响）。
 - `--model glm` / `glmm` 现在自动拒绝 `--mode trans/gw`(count 模型只有 cis 路径，否则会按数百基因 × 500k SNP PQL 重拟合）。

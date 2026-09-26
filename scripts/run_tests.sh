@@ -96,7 +96,7 @@ run "lm.cis.int50" \
 run "lm.trans" \
   "$EQTL" -v "$TEST/test.vcf.gz" -e "$TEST/test.pheno.tsv" -g "$TEST/test.gff" \
     -c "$TEST/test.covar.tsv" --model lm --mode trans --perm 50 --seed 7 \
-    --perm-trans-thr 1e-3 --perm-trans-top 200 --out "$OUT_DIR/lm.trans"
+    --out "$OUT_DIR/lm.trans"
 
 # ---------- 2. LMM: GRM path + --fast sparsification  ------------------------
 
@@ -131,16 +131,15 @@ run "lmm.cis.perm.uniform" \
 run "lmm.trans" \
   "$EQTL" -v "$TEST/test.vcf.gz" -e "$TEST/test.pheno.tsv" -g "$TEST/test.gff" \
     -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model lmm --mode trans \
-    --perm 20 --seed 11 --perm-trans-thr 1e-3 --perm-trans-top 100 \
-    --out "$OUT_DIR/lmm.trans"
+    --perm 20 --seed 11 --out "$OUT_DIR/lmm.trans"
 
 # ---------- 2b. LMM with per-gene missingness --------------------------------
 # The panels above are complete, so every gene shares one keep set and the LMM
 # paths take their shared-sample branches only. Derive a per-gene missing panel
 # to reach the other half: per-gene GRM subsetting, the per-keep basis cache,
-# and the mixed-keep SNP-outer loop, permutation stage-2 included. Both cases
-# run threaded — the shared-basis cis driver and the mixed-keep parallel region
-# are exactly what these cases exist to cover.
+# and the mixed-keep SNP-outer loop. Both cases run threaded — the
+# shared-basis cis driver and the mixed-keep parallel region are exactly what
+# these cases exist to cover.
 # The gene count is capped so the two cases stay inside the <60s budget (keep
 # this in mind before raising N_GENES: trans scales with it), and the missing
 # pattern is fixed so runs are comparable.
@@ -176,8 +175,7 @@ run "lmm.cis.missing" \
 run "lmm.trans.missing" \
   "$EQTL" -v "$TEST/test.vcf.gz" -e "$OUT_DIR/miss.pheno.tsv" -g "$TEST/test.gff" \
     -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model lmm --mode trans -t "$T" \
-    --perm 20 --seed 3 --perm-trans-thr 1e-3 --perm-trans-top 50 \
-    --out "$OUT_DIR/lmm.trans.missing"
+    --perm 20 --seed 3 --out "$OUT_DIR/lmm.trans.missing"
 
 # `run` only checks the exit code, so assert that the per-gene keeps actually
 # reached the test output rather than trusting that the branch was taken: the

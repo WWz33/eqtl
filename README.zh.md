@@ -68,8 +68,6 @@ eqtl fission [options]
 | `--max-miss` | 0.8 | SNP 缺失率上限 |
 | `--fast` | 关 | 稀疏 GRM（LMM）；固定离散参数（GLM/GLMM） |
 | `--perm` | 0 | 基因级置换 |
-| `--perm-trans-thr` | 1e-5 | 未使用：trans stage-2 置换已停用 |
-| `--perm-trans-top` | 1000 | 未使用：trans stage-2 置换已停用 |
 | `--seed` | — | 随机种子 |
 | `--disable-beta-approx` | 关 | 跳过 beta 近似 p |
 | `-t, --thread` | 1 | 线程数 |

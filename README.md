@@ -68,8 +68,6 @@ eqtl fission [options]
 | `--max-miss` | 0.8 | SNP missingness cutoff |
 | `--fast` | off | sparse GRM (LMM); fixed dispersion (GLM/GLMM) |
 | `--perm` | 0 | gene-level permutations |
-| `--perm-trans-thr` | 1e-5 | unused: trans stage-2 permutation is disabled |
-| `--perm-trans-top` | 1000 | unused: trans stage-2 permutation is disabled |
 | `--seed` | — | RNG seed |
 | `--disable-beta-approx` | off | skip beta-approx p |
 | `-t, --thread` | 1 | threads |
@@ -155,7 +153,7 @@ GLM/GLMM trans/gw is explicitly rejected at argument-parse time.
 
 ```bash
 make smoke         # tiny synthetic panel, lm/lmm/glm/glmm cis + guard checks
-make test          # 19-case matrix: all models/scopes, perm path, INT, error paths
+make test          # 21-case matrix: all models/scopes, perm path, INT, error paths
 python3 scripts/gold_lm.py   # pin-investigate OLS to numpy reference
 ```
 
