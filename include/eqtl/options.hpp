@@ -44,7 +44,6 @@ struct Options {
   double max_miss = 0.8;
   // keep if maf_min <= MAF <= 1-maf_min on analysis samples (non-missing); 0 = off
   double maf = 0.0;
-  bool fast = false;
   int threads = 1;
 
   int perm = 0; // gene-level permutations; 0 = off

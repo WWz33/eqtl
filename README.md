@@ -66,7 +66,6 @@ eqtl fission [options]
 | `--maf` | 0 | min effect-allele frequency |
 | `--miss-hand` | impute | `filter`/`impute` |
 | `--max-miss` | 0.8 | SNP missingness cutoff |
-| `--fast` | off | sparse GRM (LMM); fixed dispersion (GLM/GLMM) |
 | `--perm` | 0 | gene-level permutations |
 | `--seed` | — | RNG seed |
 | `--perm-mode` | beta | gene-level perm p: `beta` or `exact` (`exact`: p_beta stays NA) |
@@ -153,11 +152,11 @@ GLM/GLMM trans/gw is explicitly rejected at argument-parse time.
 
 ```bash
 make smoke         # tiny synthetic panel, lm/lmm/glm/glmm cis + guard checks
-make test          # 21-case matrix: all models/scopes, perm path, INT, error paths
+make test          # 20-case matrix: all models/scopes, perm path, INT, error paths
 python3 scripts/gold_lm.py   # pin-investigate OLS to numpy reference
 ```
 
-The matrix covers: nominal + INT + permutations per model, GRM path, `--fast` LMM, error-path rejection (science-in bad `--window`, glm+trans, INT+glm), and p-value sanity checks (uniform null under the synthetic panel).
+The matrix covers: nominal + INT + permutations per model, GRM path, error-path rejection (science-in bad `--window`, glm+trans, INT+glm), and p-value sanity checks (uniform null under the synthetic panel).
 
 
 

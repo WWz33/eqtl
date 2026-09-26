@@ -66,7 +66,6 @@ eqtl fission [options]
 | `--maf` | 0 | 最小 effect 等位基因频率 |
 | `--miss-hand` | impute | `filter`/`impute` |
 | `--max-miss` | 0.8 | SNP 缺失率上限 |
-| `--fast` | 关 | 稀疏 GRM（LMM）；固定离散参数（GLM/GLMM） |
 | `--perm` | 0 | 基因级置换 |
 | `--seed` | — | 随机种子 |
 | `--perm-mode` | beta | 基因级置换 p：`beta` 或 `exact`（`exact` 时 p_beta 为 NA） |

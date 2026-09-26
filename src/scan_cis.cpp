@@ -56,9 +56,7 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
   LmmBasis grm_basis;
   bool have_grm_basis = false;
   if (need_lmm_basis && Kptr && Kptr->rows() == static_cast<int>(ph.sample_ids.size())) {
-    Eigen::MatrixXd K_use = *Kptr;
-    if (opt.fast) sparsify_grm(K_use, 1e-4);
-    grm_basis = make_lmm_basis(K_use);
+    grm_basis = make_lmm_basis(*Kptr);
     have_grm_basis = true;
   }
 
@@ -116,7 +114,7 @@ void run_cis_parallel(const Options& opt, PhenoData& ph, const CovData& cov,
           gr.basis_ref = &grm_basis;  // shared; avoids a per-gene n×n Q copy
           gr.has_basis = true;
         } else {
-          if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
+          if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, gr)) continue;
         }
         GeneSummary summary;
         const GeneLoc* locp = &w.loc;

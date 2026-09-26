@@ -18,6 +18,7 @@
 - **trans 置换 p 停用**：`--perm` 在 trans/gw 下不再触发 stage-2，`p_emp`/`p_beta`/β 形参输出 NA（运行时 warn 一次）。原因：其 top-K 置换 null 按观测 p 选取，观测端带选择偏倚，`p_emp` 对 ~97% 基因恒等于 1/(B+1)（简并而非保守）。cis 置换不受影响。分析见 `eqtl-gene-level-p-plan.md`。
 - **删除 `--perm-trans-thr` / `--perm-trans-top`**：stage-2 停用后已无任何代码读取，属于死参数；传入会报未知选项。README 表格同步移除。
 - **`--disable-beta-approx` → `--perm-mode {beta,exact}`**：同一个概念（基因级置换 p 的算法）一个旋钮；`exact` 等价于原开关（不算 β 拟合，`p_beta`/β 形参为 NA），`beta` 为默认，行为与改前完全一致。
+- **删除 `--fast`**：一个开关装了三种不同语义，且没有一种站得住——LMM 半边是对 GRM 做稀疏近似（实测零加速、结果改变），GLM 半边只写了一个从未被读取的字段（无效果），GLMM 半边冻结 σ² 属可省步骤。默认路径（不带该开关）行为完全不变；稀疏 GRM 与 basis 缓存里为此设的键均一并移除。
 - `--perm-freeze-delta`（默认关闭）：LMM 置换链路复用观测 δ、跳过每次抽样的 REML 搜索。cis 置换快 14–30%、trans stage-2 快 23%；`p_emp`/`p_beta` 有轻微漂移（nominal 结果不变），既有输出默认不受影响。
 - `EQTL_PROF=1`：退出时打印 REML 求值次数与耗时（排查用，默认关闭，无行为影响）。
 - `--model glm` / `glmm` 现在自动拒绝 `--mode trans/gw`(count 模型只有 cis 路径，否则会按数百基因 × 500k SNP PQL 重拟合）。

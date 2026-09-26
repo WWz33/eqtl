@@ -7,7 +7,7 @@
 #
 # Additions / regressions:
 #   -L       show pass/fail lines only
-#   -j N     (eg. 4) set OMP threads for the "fast" axis
+#   THREADS=N (env, default 4) sets the thread count for the threaded cases
 #
 # Do NOT put any heavy model logic here; every test should run < 60s.
 set -euo pipefail
@@ -98,7 +98,7 @@ run "lm.trans" \
     -c "$TEST/test.covar.tsv" --model lm --mode trans --perm 50 --seed 7 \
     --out "$OUT_DIR/lm.trans"
 
-# ---------- 2. LMM: GRM path + --fast sparsification  ------------------------
+# ---------- 2. LMM: GRM path ------------------------------------------------
 
 run "grm.build" \
   "$EQTL" -v "$TEST/test.vcf.gz" --make-grm --out "$OUT_DIR/grm"
@@ -107,11 +107,6 @@ run "lmm.cis" \
   "$EQTL" -v "$TEST/test.vcf.gz" -e "$TEST/test.pheno.tsv" -g "$TEST/test.gff" \
     -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model lmm --mode cis \
     --perm 0 --out "$OUT_DIR/lmm.cis"
-
-run "lmm.cis.fast" \
-  "$EQTL" -v "$TEST/test.vcf.gz" -e "$TEST/test.pheno.tsv" -g "$TEST/test.gff" \
-    -c "$TEST/test.covar.tsv" -k "$OUT_DIR/grm" --model lmm --mode cis \
-    --fast --out "$OUT_DIR/lmm.cis.fast"
 
 run "lmm.cis.perm" \
   "$EQTL" -v "$TEST/test.vcf.gz" -e "$TEST/test.pheno.tsv" -g "$TEST/test.gff" \

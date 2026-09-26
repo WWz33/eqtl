@@ -27,15 +27,14 @@ namespace {
 // is cached and behaviour matches the uncached path exactly.
 //
 // The GRM is identified by its backing-store address, which stands in for its
-// contents: this process builds exactly one GRM, never mutates it (sparsify_grm
-// always runs on a copy) and lives longer than the cache. A second GRM in the
-// same process would need a real generation id in the key.
+// contents: this process builds exactly one GRM, never mutates it, and lives
+// longer than the cache. A second GRM in the same process would need a real
+// generation id in the key.
 constexpr size_t kBasisCacheBudgetBytes = 64ull << 20;
 
 struct BasisCacheEntry {
   uint64_t hash = 0;
   std::vector<int> keep;             // full, ordered keep vector (part of the identity)
-  bool fast = false;                 // sparsified basis or not
   const double* grm_data = nullptr;  // identity of the source GRM's backing store
   Eigen::Index grm_rows = 0;
   LmmBasis basis;
@@ -52,37 +51,34 @@ BasisCache& basis_cache() {
   return c;
 }
 
-uint64_t basis_hash(const std::vector<int>& keep, bool fast, const Eigen::MatrixXd& K) {
+uint64_t basis_hash(const std::vector<int>& keep, const Eigen::MatrixXd& K) {
   uint64_t h = keep_hash(keep);
   auto mix = [&h](uint64_t v) {
     h ^= v;
     h *= 1099511628211ull;
   };
-  mix(fast ? 1ull : 0ull);
   mix(static_cast<uint64_t>(K.rows()));
   mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(K.data())));
   return h;
 }
 
 // The returned pointer stays valid for the rest of the process.
-const LmmBasis* lookup_basis(const std::vector<int>& keep, bool fast, const Eigen::MatrixXd& K,
+const LmmBasis* lookup_basis(const std::vector<int>& keep, const Eigen::MatrixXd& K,
                              uint64_t hash) {
   BasisCache& c = basis_cache();
   std::lock_guard<std::mutex> lk(c.mu);
   for (const auto& e : c.entries) {
-    if (e.hash == hash && e.fast == fast && e.grm_rows == K.rows() && e.grm_data == K.data() &&
-        e.keep == keep)
+    if (e.hash == hash && e.grm_rows == K.rows() && e.grm_data == K.data() && e.keep == keep)
       return &e.basis;
   }
   return nullptr;
 }
 
-void remember_basis(const std::vector<int>& keep, bool fast, const Eigen::MatrixXd& K,
+void remember_basis(const std::vector<int>& keep, const Eigen::MatrixXd& K,
                     uint64_t hash, const LmmBasis& b) {
   BasisCacheEntry e;  // filled before the lock: the basis copy must not hold it
   e.hash = hash;
   e.keep = keep;
-  e.fast = fast;
   e.grm_data = K.data();
   e.grm_rows = K.rows();
   e.basis = b;
@@ -91,7 +87,7 @@ void remember_basis(const std::vector<int>& keep, bool fast, const Eigen::Matrix
   BasisCache& c = basis_cache();
   std::lock_guard<std::mutex> lk(c.mu);
   for (const auto& prev : c.entries) {  // another thread may have won the race already
-    if (prev.hash == hash && prev.fast == fast && prev.grm_rows == K.rows() &&
+    if (prev.hash == hash && prev.grm_rows == K.rows() &&
         prev.grm_data == K.data() && prev.keep == keep)
       return;
   }
@@ -107,7 +103,7 @@ void remember_basis(const std::vector<int>& keep, bool fast, const Eigen::Matrix
 // ---------------------------------------------------------------------------
 bool build_gene_ready(const Eigen::VectorXd& y_full, const Eigen::MatrixXd& X_full,
                       const Eigen::MatrixXd* K_full, bool need_k, bool need_lmm_basis,
-                      bool fast_sparse, GeneReady& out) {
+                      GeneReady& out) {
   const int n_full = static_cast<int>(y_full.size());
   out.keep.clear();
   out.keep.reserve(static_cast<size_t>(n_full));
@@ -150,19 +146,13 @@ bool build_gene_ready(const Eigen::VectorXd& y_full, const Eigen::MatrixXd& X_fu
       const Eigen::MatrixXd& K_src = out.K_ref ? *out.K_ref : out.K;
       // Key on the source GRM, not on the per-gene subset buffer — the subset
       // address is recycled between genes, the GRM is not.
-      const uint64_t key = basis_hash(out.keep, fast_sparse, *K_full);
-      const LmmBasis* hit = lookup_basis(out.keep, fast_sparse, *K_full, key);
+      const uint64_t key = basis_hash(out.keep, *K_full);
+      const LmmBasis* hit = lookup_basis(out.keep, *K_full, key);
       if (hit) {
         out.basis = *hit;  // unlocked: cache entries are stable and never erased
       } else {
-        if (fast_sparse) {
-          Eigen::MatrixXd K_use = K_src;
-          sparsify_grm(K_use, 1e-4);
-          out.basis = make_lmm_basis(K_use);
-        } else {
-          out.basis = make_lmm_basis(K_src);
-        }
-        remember_basis(out.keep, fast_sparse, *K_full, key, out.basis);
+        out.basis = make_lmm_basis(K_src);
+        remember_basis(out.keep, *K_full, key, out.basis);
       }
       out.has_basis = true;
     }
@@ -185,7 +175,7 @@ Eigen::VectorXd subset_dosage(const std::vector<double>& full, const std::vector
 // ---------------------------------------------------------------------------
 // Per-SNP test dispatch
 // ---------------------------------------------------------------------------
-AssocHit run_test(Model model, bool fast, const GeneReady& gr, const Eigen::VectorXd& g,
+AssocHit run_test(Model model, const GeneReady& gr, const Eigen::VectorXd& g,
                   GenePrepLm* lm_cache, GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache,
                   GenePrepGlmm* glmm_cache, bool have_cache) {
   switch (model) {
@@ -196,24 +186,24 @@ AssocHit run_test(Model model, bool fast, const GeneReady& gr, const Eigen::Vect
     case Model::Lmm: {
       if (!have_cache) {
         const LmmBasis& b = gr.basis_ref ? *gr.basis_ref : gr.basis;
-        if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, b, fast);
-        else *lmm_cache = prep_lmm(gr.y, gr.X, gr.K_ref ? *gr.K_ref : gr.K, fast);
+        if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, b);
+        else *lmm_cache = prep_lmm(gr.y, gr.X, gr.K_ref ? *gr.K_ref : gr.K);
       }
       return test_lmm(*lmm_cache, g);
     }
     case Model::Glm: {
-      if (!have_cache) *glm_cache = prep_glm_nb(gr.y, gr.X, fast);
+      if (!have_cache) *glm_cache = prep_glm_nb(gr.y, gr.X);
       return test_glm_nb(*glm_cache, g);
     }
     case Model::Glmm: {
-      if (!have_cache) *glmm_cache = prep_glmm_pois(gr.y, gr.X, gr.K_ref ? *gr.K_ref : gr.K, fast);
+      if (!have_cache) *glmm_cache = prep_glmm_pois(gr.y, gr.X, gr.K_ref ? *gr.K_ref : gr.K);
       return test_glmm_pois(*glmm_cache, g);
     }
   }
   return {};
 }
 
-void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache,
+void prep_null(Model model, const GeneReady& gr, GenePrepLm* lm_cache,
                GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache, GenePrepGlmm* glmm_cache,
                const LmmPrepReuse* reuse) {
   switch (model) {
@@ -223,16 +213,16 @@ void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache
     case Model::Lmm: {
       const LmmBasis& b = gr.basis_ref ? *gr.basis_ref : gr.basis;
       const Eigen::MatrixXd& k = gr.K_ref ? *gr.K_ref : gr.K;
-      if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, b, fast, reuse);
-      else *lmm_cache = prep_lmm(gr.y, gr.X, k, fast);
+      if (gr.has_basis) *lmm_cache = prep_lmm(gr.y, gr.X, b, reuse);
+      else *lmm_cache = prep_lmm(gr.y, gr.X, k);
       break;
     }
     case Model::Glm:
-      *glm_cache = prep_glm_nb(gr.y, gr.X, fast);
+      *glm_cache = prep_glm_nb(gr.y, gr.X);
       break;
     case Model::Glmm: {
       const Eigen::MatrixXd& k = gr.K_ref ? *gr.K_ref : gr.K;
-      *glmm_cache = prep_glmm_pois(gr.y, gr.X, k, fast);
+      *glmm_cache = prep_glmm_pois(gr.y, gr.X, k);
       break;
     }
   }
@@ -263,7 +253,7 @@ void fill_snp_id(AssocHit& h, const SnpRec& snp) {
   else h.snp = snp.chrom + ":" + std::to_string(snp.pos) + ":" + snp.ref + ":" + snp.alt;
 }
 
-AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp,
+AssocHit test_one(Model model, const GeneReady& gr, const SnpRec& snp,
                   const std::string& gene, const GeneLoc* loc, GenePrepLm* lm_c, GenePrepLmm* lmm_c,
                   GenePrepGlm* glm_c, GenePrepGlmm* glmm_c, bool have_cache,
                   Eigen::VectorXd& g_buf) {
@@ -280,7 +270,7 @@ AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp
     h.p = std::numeric_limits<double>::quiet_NaN();
     return h;
   }
-  AssocHit h = run_test(model, fast, gr, g_buf, lm_c, lmm_c, glm_c, glmm_c, have_cache);
+  AssocHit h = run_test(model, gr, g_buf, lm_c, lmm_c, glm_c, glmm_c, have_cache);
   h.maf = maf_sub;
   h.n = static_cast<int>(gr.keep.size());
   h.gene = gene;
@@ -295,12 +285,12 @@ AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp
   return h;
 }
 
-double test_one_p(Model model, bool fast, const GeneReady& gr, const Eigen::VectorXd& g,
+double test_one_p(Model model, const GeneReady& gr, const Eigen::VectorXd& g,
                   GenePrepLm* lm_c, GenePrepLmm* lmm_c, GenePrepGlm* glm_c, GenePrepGlmm* glmm_c) {
   double maf_sub;
   if (!std::isfinite(subset_maf_or_nan(g, &maf_sub)))
     return std::numeric_limits<double>::quiet_NaN();
-  return run_test(model, fast, gr, g, lm_c, lmm_c, glm_c, glmm_c, true).p;
+  return run_test(model, gr, g, lm_c, lmm_c, glm_c, glmm_c, true).p;
 }
 
 // ---------------------------------------------------------------------------

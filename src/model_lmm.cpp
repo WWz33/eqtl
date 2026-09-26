@@ -148,24 +148,6 @@ static double optimize_delta(const Eigen::VectorXd& y_til, const Eigen::MatrixXd
   return d;
 }
 
-void sparsify_grm(Eigen::MatrixXd& K, double abs_thr) {
-  if (abs_thr <= 0.0) return;
-  const int n = static_cast<int>(K.rows());
-  if (K.cols() != n) return;
-  size_t n_zero = 0;
-  for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < i; ++j) {
-      if (std::abs(K(i, j)) < abs_thr) {
-        K(i, j) = 0.0;
-        K(j, i) = 0.0;
-        n_zero += 2;
-      }
-    }
-  }
-  info("fast: GRM sparse approx thr=" + std::to_string(abs_thr) + " zeroed " +
-       std::to_string(n_zero) + " off-diagonal entries");
-}
-
 LmmBasis make_lmm_basis(const Eigen::MatrixXd& K) {
   LmmBasis b;
   Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(K);
@@ -185,7 +167,7 @@ static void fill_dinv(GenePrepLmm& p) {
 }
 
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const LmmBasis& basis,
-                     bool /*fast*/, const LmmPrepReuse* reuse) {
+                     const LmmPrepReuse* reuse) {
   GenePrepLmm p;
   p.n = static_cast<int>(y.size());
   p.p = static_cast<int>(X.cols());
@@ -227,9 +209,8 @@ GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const L
   return p;
 }
 
-GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd& K,
-                     bool fast) {
-  return prep_lmm(y, X, make_lmm_basis(K), fast);
+GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd& K) {
+  return prep_lmm(y, X, make_lmm_basis(K));
 }
 
 namespace {

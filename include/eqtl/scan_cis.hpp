@@ -21,7 +21,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   GenePrepLmm lmm_c;
   GenePrepGlm glm_c;
   GenePrepGlmm glmm_c;
-  prep_null(model, opt.fast, gr, &lm_c, &lmm_c, &glm_c, &glmm_c);
+  prep_null(model, gr, &lm_c, &lmm_c, &glm_c, &glmm_c);
 
   AssocHit best;
   best.p = 2.0;
@@ -59,7 +59,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
   };
 
   stream_snps([&](const SnpRec& snp) {
-    AssocHit h = test_one(model, opt.fast, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true, g_buf);
+    AssocHit h = test_one(model, gr, snp, gene, loc, &lm_c, &lmm_c, &glm_c, &glmm_c, true, g_buf);
     apply_hit(h, snp);
     if (do_perm && std::isfinite(h.p)) {
       const size_t n_cached = cache_gtil ? cached_gtil.size() : cached_dosage.size();
@@ -194,7 +194,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
         GenePrepLmm lmm_b;
         GenePrepGlm glm_b;
         GenePrepGlmm glmm_b;
-        prep_null(model, opt.fast, grb, &lm_b, &lmm_b, &glm_b, &glmm_b, &lmm_reuse);
+        prep_null(model, grb, &lm_b, &lmm_b, &glm_b, &glmm_b, &lmm_reuse);
 
         double minp = 1.0;
         if (cache_gtil) {
@@ -217,7 +217,7 @@ void scan_gene_snps(const Options& opt, Model model, const std::string& scope, c
           if (best_abs >= 0.0) minp = p_from_t(best_stat, lmm_b.n - lmm_b.p - 1);
         } else {
           for (const auto& gd : cached_dosage) {
-            const double p = test_one_p(model, opt.fast, grb, gd, &lm_b, &lmm_b, &glm_b, &glmm_b);
+            const double p = test_one_p(model, grb, gd, &lm_b, &lmm_b, &glm_b, &glmm_b);
             if (std::isfinite(p) && p < minp) minp = p;
           }
         }

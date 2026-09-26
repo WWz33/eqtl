@@ -204,7 +204,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           job.gene = gene;
           job.loc = loc_store;
           job.has_loc = has_loc;
-          if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, job.gr)) continue;
+          if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, job.gr)) continue;
           jobs.push_back(std::move(job));
         }
         info("trans/gw LM: SNP-outer (" + std::to_string(jobs.size()) + " genes)");
@@ -231,7 +231,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
           job.gene = gene;
           job.loc = loc_store;
           job.has_loc = has_loc;
-          if (!build_gene_ready(y, cov.X, Kptr, need_k, false, opt.fast, job.gr)) continue;
+          if (!build_gene_ready(y, cov.X, Kptr, need_k, false, job.gr)) continue;
           jobs.push_back(std::move(job));
         }
         info("trans/gw LMM: SNP-outer (" + std::to_string(jobs.size()) + " genes)");
@@ -254,9 +254,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
         LmmBasis grm_basis;
         bool have_grm_basis = false;
         if (need_lmm_basis && Kptr && Kptr->rows() == static_cast<int>(ph.sample_ids.size())) {
-          Eigen::MatrixXd K_use = *Kptr;
-          if (opt.fast) sparsify_grm(K_use, 1e-4);
-          grm_basis = make_lmm_basis(K_use);
+          grm_basis = make_lmm_basis(*Kptr);
           have_grm_basis = true;
           info("LMM: shared GRM eigen-decomp (n=" + std::to_string(Kptr->rows()) + ")");
         }
@@ -290,7 +288,7 @@ int run_eqtl_geno(const Options& opt, G& geno, PhenoData& ph,
             gr.basis_ref = &grm_basis;  // shared; avoids a per-gene n×n Q copy
             gr.has_basis = true;
           } else {
-            if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, opt.fast, gr)) continue;
+            if (!build_gene_ready(y, cov.X, Kptr, need_k, need_lmm_basis, gr)) continue;
           }
 
           summaries.emplace_back();

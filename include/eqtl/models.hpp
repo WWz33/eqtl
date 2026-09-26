@@ -51,7 +51,6 @@ struct LmmBasis {
 };
 
 LmmBasis make_lmm_basis(const Eigen::MatrixXd& K);
-void sparsify_grm(Eigen::MatrixXd& K, double abs_thr = 1e-4);
 
 struct GenePrepLmm {
   Eigen::VectorXd y_til;
@@ -96,9 +95,8 @@ struct LmmPrepReuse {
 
 // Null REML for delta on X only; SNP tests use fixed delta + Wald.
 GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const LmmBasis& basis,
-                     bool fast = false, const LmmPrepReuse* reuse = nullptr);
-GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd& K,
-                     bool fast = false);
+                     const LmmPrepReuse* reuse = nullptr);
+GenePrepLmm prep_lmm(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::MatrixXd& K);
 AssocHit test_lmm(const GenePrepLmm& prep, const Eigen::VectorXd& g);
 
 struct GenePrepGlm {
@@ -109,12 +107,11 @@ struct GenePrepGlm {
   Eigen::VectorXd w;  // null working weights mu/(1+phi*mu)
   Eigen::MatrixXd XtWX_inv; // inverse null Fisher info for covariates
   double phi = 1;
-  bool fast = false;
   bool converged = true;
   int n = 0;
 };
 
-GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, bool fast);
+GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X);
 AssocHit test_glm_nb(const GenePrepGlm& prep, const Eigen::VectorXd& g);
 
 struct GenePrepGlmm {
@@ -125,13 +122,12 @@ struct GenePrepGlmm {
   double sigma2 = 1;
   Eigen::VectorXd u;
   Eigen::VectorXd mu;
-  bool fast = false;
   bool converged = true;
   int n = 0;
 };
 
 GenePrepGlmm prep_glmm_pois(const Eigen::VectorXd& y, const Eigen::MatrixXd& X,
-                            const Eigen::MatrixXd& K, bool fast);
+                            const Eigen::MatrixXd& K);
 AssocHit test_glmm_pois(const GenePrepGlmm& prep, const Eigen::VectorXd& g);
 
 // Non-negative integers on finite entries (skips non-finite). Checks up to check_n finite values.

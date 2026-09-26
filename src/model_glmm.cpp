@@ -79,7 +79,7 @@ void pql_fit(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Eigen::Ma
 }  // namespace
 
 GenePrepGlmm prep_glmm_pois(const Eigen::VectorXd& y, const Eigen::MatrixXd& X,
-                            const Eigen::MatrixXd& K, bool fast) {
+                            const Eigen::MatrixXd& K) {
   if (!looks_like_counts(y)) {
     die("glmm requires non-negative integer counts");
   }
@@ -88,7 +88,6 @@ GenePrepGlmm prep_glmm_pois(const Eigen::VectorXd& y, const Eigen::MatrixXd& X,
   prep.X = X;
   prep.K = K;
   prep.n = static_cast<int>(y.size());
-  prep.fast = fast;
   prep.offset = Eigen::VectorXd::Zero(prep.n);
   prep.sigma2 = 0.1;
   Eigen::VectorXd beta;
@@ -115,8 +114,7 @@ AssocHit test_glmm_pois(const GenePrepGlmm& prep, const Eigen::VectorXd& g) {
   Eigen::VectorXd mu;
   double sigma2 = prep.sigma2;
   bool conv = false;
-  // full: update sigma2; fast: freeze sigma2 from null
-  pql_fit(prep.y, Xg, prep.K, prep.offset, beta, u, mu, sigma2, !prep.fast, conv);
+  pql_fit(prep.y, Xg, prep.K, prep.offset, beta, u, mu, sigma2, true, conv);
 
   hit.glmm_converged = conv;
   hit.beta = beta(prep.X.cols());

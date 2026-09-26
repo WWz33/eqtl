@@ -77,7 +77,7 @@ inline bool in_cis_window(const SnpRec& s, const GeneLoc& loc, int window) {
 // ---------------------------------------------------------------------------
 bool build_gene_ready(const Eigen::VectorXd& y_full, const Eigen::MatrixXd& X_full,
                       const Eigen::MatrixXd* K_full, bool need_k, bool need_lmm_basis,
-                      bool fast_sparse, GeneReady& out);
+                      GeneReady& out);
 
 // Shared-basis fast path skips build_gene_ready's per-sample filtering, so it
 // requires y and every covariate column to be all-finite. Non-finite entries
@@ -109,13 +109,13 @@ inline uint64_t keep_hash(const std::vector<int>& keep) {
 // ---------------------------------------------------------------------------
 // Per-SNP test dispatch (model-generic)
 // ---------------------------------------------------------------------------
-AssocHit run_test(Model model, bool fast, const GeneReady& gr, const Eigen::VectorXd& g,
+AssocHit run_test(Model model, const GeneReady& gr, const Eigen::VectorXd& g,
                   GenePrepLm* lm_cache, GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache,
                   GenePrepGlmm* glmm_cache, bool have_cache);
 
 // reuse is forwarded to the LMM prep only (see LmmPrepReuse); other models
 // ignore it.
-void prep_null(Model model, bool fast, const GeneReady& gr, GenePrepLm* lm_cache,
+void prep_null(Model model, const GeneReady& gr, GenePrepLm* lm_cache,
                GenePrepLmm* lmm_cache, GenePrepGlm* glm_cache, GenePrepGlmm* glmm_cache,
                const LmmPrepReuse* reuse = nullptr);
 
@@ -123,12 +123,12 @@ double subset_maf_or_nan(const Eigen::VectorXd& g, double* maf_out);
 
 void fill_snp_id(AssocHit& h, const SnpRec& snp);
 
-AssocHit test_one(Model model, bool fast, const GeneReady& gr, const SnpRec& snp,
+AssocHit test_one(Model model, const GeneReady& gr, const SnpRec& snp,
                   const std::string& gene, const GeneLoc* loc, GenePrepLm* lm_c, GenePrepLmm* lmm_c,
                   GenePrepGlm* glm_c, GenePrepGlmm* glmm_c, bool have_cache,
                   Eigen::VectorXd& g_buf);
 
-double test_one_p(Model model, bool fast, const GeneReady& gr, const Eigen::VectorXd& g,
+double test_one_p(Model model, const GeneReady& gr, const Eigen::VectorXd& g,
                   GenePrepLm* lm_c, GenePrepLmm* lmm_c, GenePrepGlm* glm_c, GenePrepGlmm* glmm_c);
 
 // ---------------------------------------------------------------------------

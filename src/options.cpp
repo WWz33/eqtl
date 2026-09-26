@@ -130,7 +130,6 @@ void print_help() {
     << "        --pheno-norm STR   per-gene phenotype normalization none|int  [none]\n"
     << "                           int = rank-based Inverse Normal Transform\n"
     << "                           (Blizzard 2010; GTEx v8 / eQTLcatalogue / QTLtools --normal)\n"
-    << "        --fast             sparse GRM approx (LMM); glm/glmm: fix null phi/sigma2\n"
     << "\n"
     << "Fission options (subcommand: eqtl fission ...):\n"
     << "    -c, --covar FILE       residualize known covars from Y1 before PEER\n"
@@ -194,7 +193,6 @@ int parse_options(int argc, char** argv, Options& opt) {
       {"max-miss", required_argument, 0, 1012},
       {"maf", required_argument, 0, 1013},
       {"pheno-norm", required_argument, 0, 1022},
-      {"fast", no_argument, 0, 1007},
       {"thread", required_argument, 0, 't'},
       {"threads", required_argument, 0, 't'},
       {"perm", required_argument, 0, 1008},
@@ -236,7 +234,6 @@ int parse_options(int argc, char** argv, Options& opt) {
         else if (std::string(optarg) == "impute") opt.miss = MissHand::Impute;
         else die("invalid --miss-hand (filter|impute)");
         break;
-      case 1007: opt.fast = true; break;
       case 1008: opt.perm = parse_int_strict(optarg, "--perm"); if (opt.perm < 0) die("--perm must be >= 0"); break;
       case 1009: opt.seed = parse_int_strict(optarg, "--seed"); break;
       case 1010:

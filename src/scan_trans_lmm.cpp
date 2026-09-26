@@ -108,9 +108,7 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
     } else {
       const Eigen::MatrixXd& K0 = jobs[0].gr.K_ref ? *jobs[0].gr.K_ref : jobs[0].gr.K;
       if (K0.rows() > 0) {
-        Eigen::MatrixXd K_use = K0;
-        if (opt.fast) sparsify_grm(K_use, 1e-4);
-        shared_basis = make_lmm_basis(K_use);
+        shared_basis = make_lmm_basis(K0);
         have_shared_basis = true;
       }
     }
@@ -118,9 +116,9 @@ void scan_lmm_snp_outer(const Options& opt, G& geno, const MissPolicy& mp, doubl
 
   for (size_t ji = 0; ji < jobs.size(); ++ji) {
     auto& j = jobs[ji];
-    if (have_shared_basis) j.prep = prep_lmm(j.gr.y, j.gr.X, shared_basis, opt.fast);
-    else if (j.gr.has_basis) j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.basis, opt.fast);
-    else j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.K_ref ? *j.gr.K_ref : j.gr.K, opt.fast);
+    if (have_shared_basis) j.prep = prep_lmm(j.gr.y, j.gr.X, shared_basis);
+    else if (j.gr.has_basis) j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.basis);
+    else j.prep = prep_lmm(j.gr.y, j.gr.X, j.gr.K_ref ? *j.gr.K_ref : j.gr.K);
     // jobs[0].prep.Q is the shared Q used at test time; drop per-gene Q copies for the rest
     if (same_keep && ji > 0) j.prep.Q.resize(0, 0);
     if (opt.perm == 0) free_lmm_gene_raw(j);

@@ -5,10 +5,10 @@
 
 namespace eqtl {
 
-// NB GLM, log link: Var = mu + phi*mu^2. phi is the NB2 dispersion.
-// --fast: fix phi from the joint null MLE; otherwise re-estimate it between
-// IRLS rounds (MASS::glm.nb theta=1/phi alternation) so the fitted null is the
-// joint MLE — required for the score test to be a valid LRT/S-score.
+// NB GLM, log link: Var = mu + phi*mu^2. phi is the NB2 dispersion,
+// re-estimated between IRLS rounds (MASS::glm.nb theta=1/phi alternation) so
+// the fitted null is the joint MLE — required for the score test to be a
+// valid LRT/S-score.
 // Working response: z = log(mu) + (y-mu)/mu  (no offset in z; offset only in eta = Xb+offset)
 
 // NB2 dispersion MOM: E[((y-mu)^2 - mu)/mu^2] = phi  (since Var = mu + phi*mu^2).
@@ -74,13 +74,12 @@ static void nb_irls(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, const Ei
   // phi alternation exhausted outer_max without joint stationarity → not converged
 }
 
-GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X, bool fast) {
+GenePrepGlm prep_glm_nb(const Eigen::VectorXd& y, const Eigen::MatrixXd& X) {
   if (!looks_like_counts(y)) die("glm (NB) requires non-negative integer counts");
   GenePrepGlm p;
   p.y = y;
   p.X = X;
   p.n = static_cast<int>(y.size());
-  p.fast = fast;
   p.offset = Eigen::VectorXd::Zero(p.n);
   p.phi = 1.0;  Eigen::VectorXd beta, mu;
   nb_irls(y, X, p.offset, p.phi, beta, mu, true, p.converged);
