@@ -10,10 +10,10 @@
 # Usage: scripts/build_fingerprint.sh [binary]   (default: <repo>/eqtl)
 # Expected on this host: libgsl.so.28 and libmkl_rt.so.3 out of
 #   /sri/home/sri2025201067/miniforge3/envs/eqtl/lib
-# which is what `make CXX="g++ -L$C -Wl,-rpath,$C"` with
-#   C=/sri/home/sri2025201067/miniforge3/envs/eqtl/lib
-# produces. Anything else (base env's libgsl.so.25 + libopenblas.so.0, say)
-# has to be recorded as such next to the numbers it produced.
+# which is what `make GSL_PREFIX=/sri/home/sri2025201067/miniforge3/envs/eqtl -j`
+# produces (the same prefix an activated env supplies via CONDA_PREFIX).
+# Anything else (base env's libgsl.so.25 + libopenblas.so.0, say) has to be
+# recorded as such next to the numbers it produced.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="${1:-$ROOT/eqtl}"

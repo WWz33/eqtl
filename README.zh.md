@@ -10,11 +10,13 @@ cis/trans eQTL 映射。模型：LM、LMM、NB-GLM、GLMM。
 
 ## Getting Started
 
-依赖：C++17、Eigen 3、htslib、OpenBLAS、OpenMP。
+依赖：C++17、Eigen 3、htslib、OpenBLAS、OpenMP、GSL（头文件 + 动态库）。
 
 ```bash
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
-cd eqtl && make -j
+cd eqtl && make -j            # 需先激活提供 GSL 的目标环境（如 envs/eqtl）
+# 无环境或想指定其它环境：  make GSL_PREFIX=/path/to/env -j
+# 更换 GSL_PREFIX 后需重建依赖它的目标文件：make clean
 
 # 基因型：VCF → PLINK bed
 plink2 --vcf panel.vcf.gz --make-bed --out panel --allow-extra-chr

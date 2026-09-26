@@ -60,6 +60,23 @@ GFFSUB_CPP := \
 GFFSUB_OBJ := $(GFFSUB_CPP:.cpp=.o)
 
 CPPFLAGS += $(HTS_CFLAGS)
+
+# ---- GSL (not vendored: headers and shared libs live outside the tree) ----
+# Taken from the active conda/venv prefix, or pass one explicitly:
+#   make GSL_PREFIX=/path/to/env -j
+# Worth pinning per machine: which libgsl gets linked decides which BLAS it
+# drags in, and the BLAS takes part in the eigendecompositions and dgemms, so
+# a different prefix is a numerically different binary (see
+# scripts/build_fingerprint.sh). Empty prefix keeps the compiler's default
+# search path, as before. The prefix is not a make dependency, so after
+# switching it run `make clean` — otherwise stats_extra.o stays linked
+# against the previous GSL/BLAS.
+GSL_PREFIX ?= $(CONDA_PREFIX)
+ifneq ($(GSL_PREFIX),)
+  CPPFLAGS += -I$(GSL_PREFIX)/include
+  LDFLAGS += -L$(GSL_PREFIX)/lib -Wl,-rpath,$(GSL_PREFIX)/lib
+endif
+
 LDFLAGS += $(HTS_LIBS) -lgsl -lgslcblas -fopenmp -lm
 # conda's gcc defaults to PIE; our vendored htslib static .o are not PIE-clean,
 # so force a non-PIE executable. Passing -fno-PIE on compile too keeps .o and

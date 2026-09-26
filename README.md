@@ -10,11 +10,13 @@ cis/trans eQTL mapping. Models: LM, LMM, NB-GLM, GLMM.
 
 ## Getting Started
 
-Dependencies: C++17, Eigen 3, htslib, OpenBLAS, OpenMP.
+Dependencies: C++17, Eigen 3, htslib, OpenBLAS, OpenMP, GSL (headers + libs).
 
 ```bash
 git clone --recurse-submodules https://github.com/WWz33/eqtl.git
-cd eqtl && make -j
+cd eqtl && make -j            # with the intended env active (it provides GSL)
+# no env, or a different one:  make GSL_PREFIX=/path/to/env -j
+# switching GSL_PREFIX needs a rebuild of the GSL-dependent object: make clean
 
 # genotype: VCF → PLINK bed
 plink2 --vcf panel.vcf.gz --make-bed --out panel --allow-extra-chr
